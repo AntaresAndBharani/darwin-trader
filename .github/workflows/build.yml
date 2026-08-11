@@ -1,0 +1,81 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: android
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Compute short commit SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Ensure debug keystore
+        run: |
+          if [ ! -f android/app/debug.keystore ]; then
+            keytool -genkey -v -keystore android/app/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Build snapshot APK
+        run: cd android && ./gradlew assembleSnapshot -PsnapshotLabel=${{ env.SHORT_SHA }} --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/snapshot/app-snapshot.apk dist/darwin-trader-snapshot.apk || cp android/app/build/outputs/apk/snapshot/release/app-snapshot-release.apk dist/darwin-trader-snapshot.apk || cp android/app/build/outputs/apk/snapshot/debug/app-snapshot-debug.apk dist/darwin-trader-snapshot.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: darwin-trader-snapshot-${{ env.SHORT_SHA }}
+          path: dist/darwin-trader-snapshot.apk
+          if-no-files-found: error
+
+      - name: Delete previous snapshot release and tag
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete snapshot --yes --cleanup-tag || true
+
+      - name: Update rolling snapshot pre-release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: snapshot
+          name: Snapshot (latest dev build)
+          prerelease: true
+          files: dist/darwin-trader-snapshot.apk
+          body: |
+            Latest development snapshot — branch `${{ github.ref_name }}`, commit `${{ env.SHORT_SHA }}`.
+
+            Installs **alongside** the released app as **Darwin Trader Snapshot**
+            (`com.darwintrader.app.snapshot`), allowing side-by-side strategy testing without touching production data.
+
+            **Install on your phone**
+            1. Download `darwin-trader-snapshot.apk` below.
+            2. Open it; allow "Install unknown apps" if prompted.
+            3. Tap Install.

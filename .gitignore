@@ -1,6 +1,14 @@
 # Gradle files
 .gradle/
 build/
+android/.gradle/
+android/app/build/
+
+# Python files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
 
 # Local configuration file (sdk path, etc)
 local.properties
