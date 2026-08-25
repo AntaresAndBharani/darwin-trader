@@ -1,0 +1,97 @@
+name: Subtask
+description: A single, implementable unit of work belonging to a user story. Small enough to finish in one sitting and pick up directly by an implementer.
+title: "[Subtask]: "
+labels: ["type:subtask", "status:ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **One subtask = one deliverable, under two hours, one pull request.**
+
+        It must be self-contained enough that the implementer never needs to open
+        the parent story to understand what to do, and specific enough that work
+        can start on the first read — no discovery phase, no open questions.
+
+  - type: input
+    id: parent-story
+    attributes:
+      label: Parent user story
+      description: Link to the user story this belongs to.
+      placeholder: e.g. AntaresAndBharani/darwin-trader#1
+    validations:
+      required: true
+
+  - type: input
+    id: target-repo
+    attributes:
+      label: Target repository
+      description: Which repo does this subtask apply to?
+      placeholder: e.g. darwin-trader
+    validations:
+      required: true
+
+  - type: textarea
+    id: task-description
+    attributes:
+      label: Task description
+      description: What exactly needs to be implemented.
+      placeholder: |
+        Add a StrategyStatusCard composable showing MT5 connection and active strategy state.
+    validations:
+      required: true
+
+  - type: textarea
+    id: entry-points
+    attributes:
+      label: Files / entry points
+      description: Where the work happens. List files to create or modify.
+      placeholder: |
+        - Create/Modify: android/app/src/main/java/com/darwintrader/app/ui/dashboard/DashboardScreen.kt
+        - Follow pattern in: android/app/src/main/java/com/darwintrader/app/ui/theme/Theme.kt
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Testable conditions specific to this subtask.
+      placeholder: |
+        - [ ] Card displays current strategy status
+        - [ ] Status color matches RUNNING / IDLE state
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: How to verify
+      description: Exact commands to prove completion.
+      placeholder: |
+        cd android; .\gradlew.bat testSnapshotDebugUnitTest --no-daemon
+        .\scripts\run-e2e-tests.ps1 -Delta
+    validations:
+      required: true
+
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size (time-boxed)
+      options:
+        - XS — under 30 min
+        - S — under 1 hour
+        - M — under 2 hours
+        - Too large — split this into smaller subtasks before starting
+    validations:
+      required: true
+
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Complexity
+      options:
+        - Low — clear pattern, local changes only
+        - Medium — multiple components, internal state
+        - High — new architectural pattern or complex coordination
+    validations:
+      required: true

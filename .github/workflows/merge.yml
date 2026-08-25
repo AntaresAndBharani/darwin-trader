@@ -1,0 +1,57 @@
+name: Merge & Backlog
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    if: github.event.label.name == 'review:approved'
+    env:
+      GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Merge the approved PR
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" -R "$REPO" --auto --squash --delete-branch
+
+      - name: Close the parent story once every subtask is done
+        run: |
+          set -euo pipefail
+
+          PR_BODY=$(gh pr view "$PR_NUMBER" -R "$REPO" --json body -q '.body')
+          SUBTASK=$(echo "$PR_BODY" | grep -oiP '(close[sd]?|fixe?[sd]?|resolve[sd]?)\s*:?\s*#\K[0-9]+' | head -1 || true)
+          if [ -z "${SUBTASK:-}" ]; then
+            echo "No linked subtask found in PR body — nothing to check."
+            exit 0
+          fi
+
+          STORY=$(gh api "repos/$REPO/issues/$SUBTASK/parent" -q .number 2>/dev/null || true)
+          if [ -z "${STORY:-}" ]; then
+            echo "Subtask #$SUBTASK has no parent story reference — nothing to check."
+            exit 0
+          fi
+
+          OPEN_SIBLINGS=$(gh api "repos/$REPO/issues/$STORY/sub_issues" \
+            -q '[.[] | select(.state=="open")] | length')
+
+          if [ "$OPEN_SIBLINGS" -gt 0 ]; then
+            echo "Story #$STORY still has $OPEN_SIBLINGS open subtask(s) — not closing yet."
+            exit 0
+          fi
+
+          gh issue comment "$STORY" -R "$REPO" --body "**All subtasks complete.** Every sub-issue linked to this story is now closed — the last one was #${SUBTASK}, merged via #${PR_NUMBER}. Closing this story."
+          gh issue edit "$STORY" -R "$REPO" --remove-label "status:ready" 2>/dev/null || true
+          gh issue edit "$STORY" -R "$REPO" --add-label "status:done"
+          gh issue close "$STORY" -R "$REPO"

@@ -1,0 +1,95 @@
+name: Three Amigos
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: three-amigos-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  GEMINI_MODEL: gemini-3.7-flash
+  ROUND_CAP: 3
+  VERDICT_MARKER: "<!-- three-amigos-verdict -->"
+
+jobs:
+  three-amigos:
+    runs-on: ubuntu-latest
+    if: github.event.label.name == 'status:review'
+    env:
+      GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Confirm this is a type:user-story issue
+        id: gate
+        run: |
+          set -euo pipefail
+          TYPES=$(gh issue view "$ISSUE_NUMBER" -R "$REPO" --json labels -q '[.labels[].name] | join(",")')
+          IS_STORY=false
+          case ",$TYPES," in *,type:user-story,*) IS_STORY=true;; esac
+          echo "is_story=$IS_STORY" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.gate.outputs.is_story == 'true'
+        uses: actions/checkout@v4
+
+      - name: Fetch story + all subtasks
+        if: steps.gate.outputs.is_story == 'true'
+        run: |
+          set -euo pipefail
+          gh issue view "$ISSUE_NUMBER" -R "$REPO" \
+            --json number,title,body,labels,comments > issue_context.json
+
+          SUBTASK_NUMS=$(gh api "repos/$REPO/issues/$ISSUE_NUMBER/sub_issues" -q '[.[] | select(.state=="open")] | .[].number')
+          if [ -z "$SUBTASK_NUMS" ]; then
+            echo "[]" > subtasks_context.json
+          else
+            SUBTASKS="[]"
+            for num in $SUBTASK_NUMS; do
+              ITEM=$(gh issue view "$num" -R "$REPO" --json number,title,body,labels,comments)
+              SUBTASKS=$(jq -c ". + [$ITEM]" <<< "$SUBTASKS")
+            done
+            echo "$SUBTASKS" > subtasks_context.json
+          fi
+
+      - name: Run Three Amigos (Gemini CLI)
+        if: steps.gate.outputs.is_story == 'true'
+        uses: google-github-actions/run-gemini-cli@v0
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_CLI_TRUST_WORKSPACE: "true"
+        with:
+          model: ${{ env.GEMINI_MODEL }}
+          prompt_file: .github/workflows/prompts/three-amigos.md
+
+      - name: Handle verdict
+        if: steps.gate.outputs.is_story == 'true' && hashFiles('three_amigos_output.json') != ''
+        run: |
+          set -euo pipefail
+          python3 -c "
+          import json, subprocess, os
+
+          with open('three_amigos_output.json') as f:
+              data = json.load(f)
+
+          verdict = data.get('verdict', 'READY')
+          repo = os.environ['REPO']
+          issue_num = os.environ['ISSUE_NUMBER']
+          summary = data.get('readable_summary', 'Three Amigos review complete.')
+
+          comment_body = f'<!-- three-amigos-verdict -->\n### Three Amigos Verdict: **{verdict}**\n\n{summary}'
+          subprocess.run(['gh', 'issue', 'comment', issue_num, '-R', repo, '--body', comment_body], check=True)
+
+          if verdict == 'READY':
+              subprocess.run(['gh', 'issue', 'edit', issue_num, '-R', repo, '--remove-label', 'status:review', '--add-label', 'status:ready'], check=True)
+          elif verdict == 'NEEDS_REVISION':
+              subprocess.run(['gh', 'issue', 'edit', issue_num, '-R', repo, '--remove-label', 'status:review', '--add-label', 'status:needs-revision'], check=True)
+          elif verdict == 'NEEDS_CLARIFICATION':
+              subprocess.run(['gh', 'issue', 'edit', issue_num, '-R', repo, '--remove-label', 'status:review', '--add-label', 'status:needs-clarification'], check=True)
+          "

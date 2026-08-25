@@ -1,0 +1,13 @@
+appId: com.darwintrader.app.snapshot
+tags:
+  - backtest
+---
+- launchApp:
+    clearState: false
+- tapOn: "Backtest"
+- assertVisible: "Backtest Analytics"
+- assertVisible: "Win Rate"
+- assertVisible: "Profit Factor"
+- assertVisible: "Max DD"
+- assertVisible: "RUN BACKTEST SIMULATION"
+- takeScreenshot: screenshots/03_backtest_screen

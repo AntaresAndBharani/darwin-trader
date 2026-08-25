@@ -1,0 +1,46 @@
+name: Dev & Test
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  GEMINI_MODEL: gemini-3.7-flash
+
+jobs:
+  dev-test:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'issues' && github.event.label.name == 'status:ready') ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'review:changes-requested')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Dev & Test (Gemini CLI)
+        uses: google-github-actions/run-gemini-cli@v0
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_CLI_TRUST_WORKSPACE: "true"
+          GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT }}
+        with:
+          model: ${{ env.GEMINI_MODEL }}
+          prompt_file: .github/workflows/prompts/dev-test-implement.md

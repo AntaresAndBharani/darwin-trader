@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK & CI
 
 on:
   push:
@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
 
 jobs:
   build:
@@ -15,6 +17,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r api_gateway/requirements.txt
+          pip install -r strategy_engine/requirements.txt
+          pip install pytest httpx
+
+      - name: Run Backend Tests
+        run: |
+          pytest api_gateway/tests strategy_engine/tests
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -39,13 +57,24 @@ jobs:
             keytool -genkey -v -keystore android/app/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+      - name: Run Android Unit Tests
+        run: cd android && ./gradlew testSnapshotDebugUnitTest --stacktrace
+
+      - name: Summarize Unit Test Results
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          .\scripts\summarize-unit-tests.ps1 -ResultsDir "android/app/build/test-results" -PostComment
+
       - name: Build snapshot APK
         run: cd android && ./gradlew assembleSnapshot -PsnapshotLabel=${{ env.SHORT_SHA }} --stacktrace
 
       - name: Collect APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/snapshot/app-snapshot.apk dist/darwin-trader-snapshot.apk || cp android/app/build/outputs/apk/snapshot/release/app-snapshot-release.apk dist/darwin-trader-snapshot.apk || cp android/app/build/outputs/apk/snapshot/debug/app-snapshot-debug.apk dist/darwin-trader-snapshot.apk
+          cp android/app/build/outputs/apk/snapshot/release/app-snapshot-release.apk dist/darwin-trader-snapshot.apk || cp android/app/build/outputs/apk/snapshot/debug/app-snapshot-debug.apk dist/darwin-trader-snapshot.apk || cp android/app/build/outputs/apk/snapshot/app-snapshot.apk dist/darwin-trader-snapshot.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -53,13 +82,7 @@ jobs:
           name: darwin-trader-snapshot-${{ env.SHORT_SHA }}
           path: dist/darwin-trader-snapshot.apk
           if-no-files-found: error
-
-      - name: Delete previous snapshot release and tag
-        if: github.event_name != 'pull_request'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release delete snapshot --yes --cleanup-tag || true
+          overwrite: true
 
       - name: Update rolling snapshot pre-release
         if: github.event_name != 'pull_request'
