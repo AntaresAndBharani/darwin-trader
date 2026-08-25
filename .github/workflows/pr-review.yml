@@ -21,8 +21,9 @@ env:
 jobs:
   pr-review:
     runs-on: ubuntu-latest
+    if: secrets.CLAUDE_CODE_OAUTH_TOKEN != ''
     env:
-      GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT }}
+      GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT || secrets.GITHUB_TOKEN }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       REPO: ${{ github.repository }}
     steps:

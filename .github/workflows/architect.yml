@@ -24,7 +24,7 @@ jobs:
       github.event.label.name == 'status:needs-revision' ||
       github.event.label.name == 'status:needs-clarification'
     env:
-      GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT }}
+      GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT || secrets.GITHUB_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       REPO: ${{ github.repository }}
       TRIGGER_LABEL: ${{ github.event.label.name }}

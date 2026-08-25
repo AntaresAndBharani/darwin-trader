@@ -40,7 +40,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_CLI_TRUST_WORKSPACE: "true"
-          GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT }}
+          GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT || secrets.GITHUB_TOKEN }}
         with:
           model: ${{ env.GEMINI_MODEL }}
           prompt_file: .github/workflows/prompts/dev-test-implement.md

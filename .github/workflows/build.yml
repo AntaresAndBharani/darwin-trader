@@ -31,8 +31,10 @@ jobs:
           pip install pytest httpx
 
       - name: Run Backend Tests
+        env:
+          PYTHONPATH: .
         run: |
-          pytest api_gateway/tests strategy_engine/tests
+          python -m pytest api_gateway/tests strategy_engine/tests
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.label.name == 'status:review'
     env:
-      GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT }}
+      GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT || secrets.GITHUB_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       REPO: ${{ github.repository }}
     steps:
