@@ -1,0 +1,82 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  id-token: write
+
+env:
+  ROUND_CAP: 3
+  VERDICT_MARKER: "<!-- pr-review-verdict -->"
+
+jobs:
+  pr-review:
+    runs-on: ubuntu-latest
+    if: secrets.CLAUDE_CODE_OAUTH_TOKEN != ''
+    env:
+      GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT || secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Fetch PR context
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" -R "$REPO" --json number,title,body,url,comments > pr_meta.json
+          gh pr diff "$PR_NUMBER" -R "$REPO" > pr_diff.txt
+
+      - name: Run PR Review (Claude Sonnet)
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt_file: .github/workflows/prompts/pr-review.md
+          claude_args: '--model claude-sonnet-5 --permission-mode dontAsk --allowedTools "Read" "Grep" "Glob" "Write"'
+
+      - name: Apply review verdict
+        if: steps.claude.outcome == 'success' && hashFiles('pr_review_output.json') != ''
+        run: |
+          set -euo pipefail
+          python3 -c "
+          import json, subprocess, os
+
+          with open('pr_review_output.json') as f:
+              data = json.load(f)
+
+          verdict = data.get('verdict', 'CHANGES_REQUESTED')
+          repo = os.environ['REPO']
+          pr_num = os.environ['PR_NUMBER']
+          summary = data.get('pr_comment_markdown', 'PR review complete.')
+
+          comment_body = f'<!-- pr-review-verdict -->\n### PR Review Verdict: **{verdict}**\n\n{summary}'
+          subprocess.run(['gh', 'pr', 'comment', pr_num, '-R', repo, '--body', comment_body], check=True)
+
+          subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--remove-label', 'review:approved'], check=False)
+          subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--remove-label', 'review:changes-requested'], check=False)
+
+          if verdict == 'APPROVED':
+              subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--add-label', 'review:approved'], check=True)
+          else:
+              subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--add-label', 'review:changes-requested'], check=True)
+
+          # File non-blocking follow-up issues
+          followups = data.get('followup_backlog_issues', [])
+          for item in followups:
+              title = item.get('title', 'Followup issue')
+              body = item.get('body', '')
+              labels = ','.join(item.get('labels', ['tech-debt']))
+              subprocess.run(['gh', 'issue', 'create', '-R', repo, '--title', title, '--body', body, '--label', labels], check=True)
+          "

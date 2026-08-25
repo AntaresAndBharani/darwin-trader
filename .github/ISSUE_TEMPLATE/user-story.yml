@@ -1,0 +1,101 @@
+name: User Story
+description: A product-level definition of a feature or capability, broken down into subtasks. Written during the definition phase.
+title: "[Story]: "
+labels: ["type:user-story", "status:definition"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue defines **what** needs to be built and **why**, not **how**.
+        It must contain enough context for an implementer working with no prior
+        knowledge of the discussion that produced it — including a different AI
+        model in a different tool.
+
+        The fields below follow **SMART**: Specific, Measurable, Achievable,
+        Relevant, Time-bound. Each field is tagged with the letter it covers.
+        A story that cannot fill these in is not ready to leave the definition phase.
+
+  - type: textarea
+    id: story-statement
+    attributes:
+      label: Story statement — Specific
+      description: One sentence, in the standard form. Name a real role, one capability, and the outcome that role gets.
+      placeholder: |
+        As a trader, I want to view live strategy risk metrics on the dashboard,
+        so that I can monitor portfolio drawdown in real-time.
+      value: |
+        As a <role>, I want <capability>, so that <outcome>.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Business context — Relevant
+      description: Why does this story exist now? What problem does it solve, for whom, and which product goal or OKR does it serve?
+      placeholder: |
+        e.g. Traders need mobile visibility into automated MT5 strategy execution and live drawdown.
+    validations:
+      required: true
+
+  - type: textarea
+    id: success-metrics
+    attributes:
+      label: Success metrics — Measurable
+      description: How will we know this worked, in numbers? Give the metric, its current baseline, and the target.
+      placeholder: |
+        - Dashboard latency: < 500ms
+        - E2E flow pass rate: 100%
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria — Specific / Measurable
+      description: Testable, unambiguous conditions that define "this works." Prefer Given/When/Then.
+      placeholder: |
+        - [ ] Given an active strategy, when opening the app, then the current equity and drawdown status are visible
+        - [ ] Given a change in parameters, when saving, then the gateway receives updated risk limits
+    validations:
+      required: true
+
+  - type: textarea
+    id: feasibility
+    attributes:
+      label: Feasibility and dependencies — Achievable
+      description: What must already exist for this to be buildable? List known unknowns or blockers.
+      placeholder: |
+        - Requires FastAPI routes in api_gateway
+        - Android Jetpack Compose UI components in android/app
+    validations:
+      required: true
+
+  - type: dropdown
+    id: story-size
+    attributes:
+      label: Story size — Time-bound
+      description: A story should decompose into roughly 2-6 subtasks.
+      options:
+        - Small (2-3 subtasks, ~1 day of implementation)
+        - Medium (4-6 subtasks, ~2-3 days of implementation)
+        - Too large — split into multiple stories before starting
+    validations:
+      required: true
+
+  - type: input
+    id: target-date
+    attributes:
+      label: Target milestone or date — Time-bound
+      description: When does this need to be done?
+      placeholder: e.g. Sprint 1
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: Explicit boundaries to prevent scope creep.
+    validations:
+      required: false

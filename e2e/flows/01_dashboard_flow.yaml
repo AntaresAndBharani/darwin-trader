@@ -1,0 +1,13 @@
+appId: com.darwintrader.app.snapshot
+tags:
+  - dashboard
+  - smoke
+  - core
+---
+- launchApp:
+    clearState: false
+- assertVisible: "Darwin Trader"
+- assertVisible: "Account Equity"
+- assertVisible: "Balance"
+- assertVisible: "Floating PnL"
+- takeScreenshot: screenshots/01_dashboard_screen

@@ -1,0 +1,38 @@
+{
+  "version": "1.0",
+  "description": "Deterministic mapping from changed file path patterns to Darwin Trader Maestro E2E flow tags.",
+  "rules": [
+    {
+      "pattern": "android/app/src/main/java/**/ui/dashboard/**",
+      "tags": ["dashboard"]
+    },
+    {
+      "pattern": "android/app/src/main/java/**/ui/strategy/**",
+      "tags": ["strategies"]
+    },
+    {
+      "pattern": "android/app/src/main/java/**/ui/backtest/**",
+      "tags": ["backtest"]
+    },
+    {
+      "pattern": "android/app/src/main/java/**/ui/theme/**",
+      "tags": ["theme", "core"]
+    },
+    {
+      "pattern": "android/app/src/main/java/**/MainActivity.kt",
+      "tags": ["core", "navigation"]
+    },
+    {
+      "pattern": "android/app/src/main/java/**/data/**",
+      "tags": ["core"]
+    },
+    {
+      "pattern": "api_gateway/**",
+      "tags": ["core", "dashboard"]
+    },
+    {
+      "pattern": "strategy_engine/**",
+      "tags": ["backtest", "strategies"]
+    }
+  ]
+}

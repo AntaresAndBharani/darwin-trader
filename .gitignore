@@ -40,3 +40,8 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Local test & build artifacts
+local_test/
+dist/
+unit-test-summary.md

@@ -1,0 +1,14 @@
+appId: com.darwintrader.app.snapshot
+tags:
+  - navigation
+  - core
+---
+- launchApp:
+    clearState: false
+- tapOn: "Strategy"
+- assertVisible: "Strategy Parameters"
+- tapOn: "Backtest"
+- assertVisible: "Backtest Analytics"
+- tapOn: "Dashboard"
+- assertVisible: "Account Equity"
+- takeScreenshot: screenshots/04_navigation_complete

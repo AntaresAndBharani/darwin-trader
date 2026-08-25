@@ -1,0 +1,13 @@
+appId: com.darwintrader.app.snapshot
+tags:
+  - strategies
+---
+- launchApp:
+    clearState: false
+- tapOn: "Strategy"
+- assertVisible: "Strategy Parameters"
+- assertVisible: "Risk Per Trade (%)"
+- assertVisible: "Max Daily Drawdown Cap (%)"
+- assertVisible: "Strategy Magic Number"
+- assertVisible: "SAVE PARAMETERS"
+- takeScreenshot: screenshots/02_strategy_screen
