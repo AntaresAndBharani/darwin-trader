@@ -46,7 +46,7 @@ param(
     [string]$ClaudePath = "C:\Users\rogal\.local\bin\claude.exe",
     [string]$DefaultModel = "claude-sonnet-5",
     [string]$BacklogTriageModel = "claude-sonnet-5",
-    [string]$Effort = "high",
+    [string]$Effort = "medium",
     [string]$PromptTemplateDir = (Join-Path $PSScriptRoot "..\..\.claude\tasks"),
     [int[]]$OnlyIssueNumbers = @()
 )
