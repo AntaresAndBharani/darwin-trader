@@ -522,7 +522,9 @@ function Apply-ArchitectDecision {
                             $createdNum = ($createdUrl.Trim() -split "/")[-1]
                             Write-Log "Created subtask #$createdNum ($createdUrl); linking as sub_issue to story #$StoryNumber..."
 
-                            $linkOut = gh api "repos/$Repo/issues/$StoryNumber/sub_issues" -f "sub_issue_id=$createdNum" 2>&1
+                            $dbIdOut = gh api "repos/$Repo/issues/$createdNum" -q .id 2>&1
+                            $dbId = (ConvertTo-SafeString $dbIdOut).Trim()
+                            $linkOut = gh api --method POST "repos/$Repo/issues/$StoryNumber/sub_issues" -F "sub_issue_id=$dbId" 2>&1
                             if ($LASTEXITCODE -ne 0) {
                                 Write-Log "Failed to link subtask #${createdNum} to story #${StoryNumber}: $(ConvertTo-SafeString $linkOut)" "WARN"
                             } else {
