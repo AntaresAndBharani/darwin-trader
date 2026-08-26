@@ -191,6 +191,19 @@ if ($Tags.Count -gt 0) {
 # 6. Execute Maestro Flows
 Write-Host "`n[4/4] Running Maestro flows ($Flow)..." -ForegroundColor Yellow
 
+$BackendProcess = $null
+try {
+    $TestHttp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/v1/strategy/status" -TimeoutSec 2 -ErrorAction SilentlyContinue
+} catch {
+    $TestHttp = $null
+}
+
+if (-not $TestHttp) {
+    Write-Host "Starting local FastAPI gateway on 0.0.0.0:8000 for E2E tests..." -ForegroundColor Cyan
+    $BackendProcess = Start-Process -FilePath "python" -ArgumentList "-m", "uvicorn", "api_gateway.main:app", "--host", "0.0.0.0", "--port", "8000" -PassThru -WindowStyle Hidden
+    Start-Sleep -Seconds 3
+}
+
 $FlowFiles = @()
 if (Test-Path $Flow -PathType Container) {
     $FlowFiles = Get-ChildItem -Path $Flow -Filter "*.yaml" | Sort-Object Name
@@ -221,38 +234,45 @@ Write-Host "Discovered $($FlowFiles.Count) active flow(s) to execute." -Foregrou
 $ExecutionResults = @()
 $OverallPassed = $true
 
-foreach ($flowFile in $FlowFiles) {
-    Write-Host "`nRunning flow: $($flowFile.Name)..." -ForegroundColor Cyan
-    $MaestroArgs = @("test", $flowFile.FullName)
-    
-    $FlowPassed = $true
-    try {
-        & $MaestroPath @MaestroArgs
-        if ($LASTEXITCODE -ne 0) { $FlowPassed = $false }
-    } catch {
-        $FlowPassed = $false
+try {
+    foreach ($flowFile in $FlowFiles) {
+        Write-Host "`nRunning flow: $($flowFile.Name)..." -ForegroundColor Cyan
+        $MaestroArgs = @("test", $flowFile.FullName)
+        
+        $FlowPassed = $true
+        try {
+            & $MaestroPath @MaestroArgs
+            if ($LASTEXITCODE -ne 0) { $FlowPassed = $false }
+        } catch {
+            $FlowPassed = $false
+        }
+        
+        if (-not $FlowPassed) {
+            $OverallPassed = $false
+            Write-Host "Flow failed: $($flowFile.Name)" -ForegroundColor Red
+            
+            $ScreenshotName = "failure-$($flowFile.BaseName).png"
+            if (!(Test-Path "docs\screenshots")) { New-Item -ItemType Directory -Path "docs\screenshots" | Out-Null }
+            & $AdbPath -s $OnlineDevice exec-out screencap -p > "docs\screenshots\$ScreenshotName"
+            
+            $ExecutionResults += [PSCustomObject]@{
+                flow = $flowFile.Name
+                passed = $false
+                screenshot = $ScreenshotName
+            }
+        } else {
+            Write-Host "Flow passed: $($flowFile.Name)" -ForegroundColor Green
+            $ExecutionResults += [PSCustomObject]@{
+                flow = $flowFile.Name
+                passed = $true
+                screenshot = $null
+            }
+        }
     }
-    
-    if (-not $FlowPassed) {
-        $OverallPassed = $false
-        Write-Host "Flow failed: $($flowFile.Name)" -ForegroundColor Red
-        
-        $ScreenshotName = "failure-$($flowFile.BaseName).png"
-        if (!(Test-Path "docs\screenshots")) { New-Item -ItemType Directory -Path "docs\screenshots" | Out-Null }
-        & $AdbPath -s $OnlineDevice exec-out screencap -p > "docs\screenshots\$ScreenshotName"
-        
-        $ExecutionResults += [PSCustomObject]@{
-            flow = $flowFile.Name
-            passed = $false
-            screenshot = $ScreenshotName
-        }
-    } else {
-        Write-Host "Flow passed: $($flowFile.Name)" -ForegroundColor Green
-        $ExecutionResults += [PSCustomObject]@{
-            flow = $flowFile.Name
-            passed = $true
-            screenshot = $null
-        }
+} finally {
+    if ($BackendProcess -and -not $BackendProcess.HasExited) {
+        Write-Host "Stopping background FastAPI gateway process..." -ForegroundColor DarkGray
+        Stop-Process -Id $BackendProcess.Id -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -267,3 +287,4 @@ if ($OverallPassed) {
     Write-Host " [FAIL] Some E2E flows failed. See execution summary." -ForegroundColor Red
 }
 Write-Host "==========================================" -ForegroundColor Cyan
+

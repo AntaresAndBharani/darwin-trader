@@ -36,7 +36,6 @@ android {
         create("snapshot") {
             dimension = "version"
             applicationId = "com.darwintrader.app.snapshot"
-            applicationIdSuffix = ".snapshot"
             resValue("string", "app_name", "Darwin Trader Snapshot")
         }
     }

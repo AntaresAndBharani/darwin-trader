@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import com.darwintrader.app.data.api.ApiService
 import com.darwintrader.app.data.model.AccountInfo
+import com.darwintrader.app.data.model.AccountStatusResponse
 import com.darwintrader.app.data.model.Position
 import com.darwintrader.app.ui.account.AccountSettingsScreen
 import com.darwintrader.app.ui.backtest.BacktestScreen
@@ -34,6 +35,7 @@ class MainActivity : ComponentActivity() {
                 var accountInfo by remember { mutableStateOf(AccountInfo()) }
                 var positions by remember { mutableStateOf<List<Position>>(emptyList()) }
                 var strategyStatus by remember { mutableStateOf("IDLE") }
+                var accountStatus by remember { mutableStateOf<AccountStatusResponse?>(null) }
 
                 fun fetchTelemetry() {
                     lifecycleScope.launch {
@@ -46,13 +48,31 @@ class MainActivity : ComponentActivity() {
 
                             val statusRes = apiService.getStrategyStatus()
                             if (statusRes.isSuccessful) statusRes.body()?.let { strategyStatus = it.status }
+
+                            val connRes = apiService.getAccountStatus()
+                            if (connRes.isSuccessful) {
+                                connRes.body()?.let {
+                                    accountStatus = it
+                                    it.accountInfo?.let { acc -> accountInfo = acc }
+                                }
+                            } else {
+                                accountStatus = AccountStatusResponse(status = "DISCONNECTED")
+                            }
                         } catch (e: Exception) {
                             // Fallback to default mock data if offline
+                            accountStatus = AccountStatusResponse(status = "DISCONNECTED")
                         }
                     }
                 }
 
                 LaunchedEffect(Unit) {
+                    while (true) {
+                        fetchTelemetry()
+                        kotlinx.coroutines.delay(5000)
+                    }
+                }
+
+                LaunchedEffect(selectedTab) {
                     fetchTelemetry()
                 }
 
@@ -94,6 +114,7 @@ class MainActivity : ComponentActivity() {
                                 accountInfo = accountInfo,
                                 positions = positions,
                                 strategyStatus = strategyStatus,
+                                accountStatus = accountStatus,
                                 onStartStrategy = {
                                     lifecycleScope.launch {
                                         apiService.startStrategy()

@@ -85,3 +85,18 @@ data class AccountStatusResponse(
 
 typealias ConnectionStatusResponse = AccountStatusResponse
 
+fun AccountStatusResponse?.getConnectionBadgeText(): String {
+    if (this == null) return "Disconnected"
+    return when (this.status.uppercase()) {
+        "CONNECTED" -> {
+            if (this.mockMode) {
+                "Simulation"
+            } else if (this.server.contains("Live", ignoreCase = true)) {
+                "Connected (Live)"
+            } else {
+                "Connected (Demo)"
+            }
+        }
+        else -> "Disconnected"
+    }
+}
