@@ -302,13 +302,13 @@ function Invoke-ArchitectJudge {
                        .Replace('{{ISSUE_COMMENTS_JSON}}', $commentsJson) `
                        .Replace('{{EXISTING_SUBTASKS_JSON}}', $subtasksJson)
 
-    Write-Log "Invoking claude.exe (model=$Model, mode=$Mode, effort=medium, tools=Read,Grep,Glob) for story #$issueNumber..."
+    Write-Log "Invoking claude.exe (model=$Model, mode=$Mode, effort=$Effort, tools=Read,Grep,Glob) for story #$issueNumber..."
 
     $result = $null
     try {
         $args = @(
             "--model", $Model,
-            "--effort", "medium",
+            "--effort", $Effort,
             "--output-format", "json",
             "--tools", "Read,Grep,Glob",
             "--permission-mode", "dontAsk",

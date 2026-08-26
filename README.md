@@ -76,7 +76,7 @@ pytest api_gateway/tests strategy_engine/tests
 ## 🤖 Agentic SDLC Pipeline
 
 Darwin Trader runs the full 5-node Agentic SDLC state graph:
-- **Architect (Claude Opus/Sonnet):** Decomposes PO User Stories (`user-story.yml`) into SMART subtasks (`subtask.yml`) via native GitHub Sub-issues.
+- **Architect (Claude Sonnet 5 - High Effort):** Decomposes PO User Stories (`user-story.yml`) into SMART subtasks (`subtask.yml`) via native GitHub Sub-issues with read-only repository tool exploration.
 - **Three Amigos (Gemini 3.7 Flash):** Batch readiness review across all subtasks for a story; evaluates QA testability and assigns E2E flow tags.
 - **Dev & Test (Gemini 3.7 Flash / Antigravity):** Implements subtasks, runs unit & delta E2E tests, auto-resolves approved conflicting PRs, and opens PRs with sticky test evidence.
 - **PR Review (Claude Sonnet):** Authoritative code review inspecting diffs, acceptance criteria, and `<!-- e2e-evidence -->` test comments.

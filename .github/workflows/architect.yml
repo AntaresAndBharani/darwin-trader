@@ -53,13 +53,7 @@ jobs:
           esac
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
-          IS_BACKLOG_TRIAGE=false
-          case ",$TYPES," in *,origin:backlog-triage,*) IS_BACKLOG_TRIAGE=true;; esac
-          if [ "$IS_BACKLOG_TRIAGE" = "true" ]; then
-            echo "claude_model=claude-sonnet-5" >> "$GITHUB_OUTPUT"
-          else
-            echo "claude_model=claude-opus-5" >> "$GITHUB_OUTPUT"
-          fi
+          echo "claude_model=claude-sonnet-5" >> "$GITHUB_OUTPUT"
 
       - name: Fetch context (safe via gh/jq)
         if: steps.mode.outputs.mode != 'skip'
@@ -88,7 +82,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt_file: .github/workflows/prompts/architect-${{ steps.mode.outputs.mode }}.md
-          claude_args: '--model ${{ steps.mode.outputs.claude_model }} --permission-mode dontAsk --allowedTools "Read" "Grep" "Glob" "Write"'
+          claude_args: '--model ${{ steps.mode.outputs.claude_model }} --effort high --permission-mode dontAsk --allowedTools "Read" "Grep" "Glob" "Write"'
 
       - name: Handle output
         if: steps.mode.outputs.mode != 'skip' && steps.claude.outcome == 'success' && hashFiles('architect_output.json') != ''
