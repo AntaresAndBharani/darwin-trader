@@ -44,8 +44,9 @@
 param(
     [string]$Repo = "AntaresAndBharani/darwin-trader",
     [string]$ClaudePath = "C:\Users\rogal\.local\bin\claude.exe",
-    [string]$DefaultModel = "claude-opus-5",
+    [string]$DefaultModel = "claude-sonnet-5",
     [string]$BacklogTriageModel = "claude-sonnet-5",
+    [string]$Effort = "high",
     [string]$PromptTemplateDir = (Join-Path $PSScriptRoot "..\..\.claude\tasks"),
     [int[]]$OnlyIssueNumbers = @()
 )
@@ -296,19 +297,20 @@ function Invoke-ArchitectJudge {
         $subtasksJson = ($ExistingSubtasks | ConvertTo-Json -Depth 5)
     }
 
-    $prompt = $template.Replace('{{ISSUE_NUMBER}}', [string]$issueNumber) `
-                       .Replace('{{ISSUE_TITLE}}', [string]$StoryObj.title) `
-                       .Replace('{{ISSUE_BODY}}', [string]$StoryObj.body) `
-                       .Replace('{{ISSUE_COMMENTS_JSON}}', $commentsJson) `
-                       .Replace('{{EXISTING_SUBTASKS_JSON}}', $subtasksJson)
+    $prompt = $template.
+        Replace('{{ISSUE_NUMBER}}', [string]$issueNumber).
+        Replace('{{ISSUE_TITLE}}', [string]$StoryObj.title).
+        Replace('{{ISSUE_BODY}}', [string]$StoryObj.body).
+        Replace('{{ISSUE_COMMENTS_JSON}}', $commentsJson).
+        Replace('{{EXISTING_SUBTASKS_JSON}}', $subtasksJson)
 
-    Write-Log "Invoking claude.exe (model=$Model, mode=$Mode, effort=medium, tools=Read,Grep,Glob) for story #$issueNumber..."
+    Write-Log "Invoking claude.exe (model=$Model, mode=$Mode, effort=$Effort, tools=Read,Grep,Glob) for story #$issueNumber..."
 
     $result = $null
     try {
         $args = @(
             "--model", $Model,
-            "--effort", "medium",
+            "--effort", $Effort,
             "--output-format", "json",
             "--tools", "Read,Grep,Glob",
             "--permission-mode", "dontAsk",
