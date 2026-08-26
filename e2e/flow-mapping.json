@@ -15,6 +15,10 @@
       "tags": ["backtest"]
     },
     {
+      "pattern": "android/app/src/main/java/**/ui/account/**",
+      "tags": ["account", "core"]
+    },
+    {
       "pattern": "android/app/src/main/java/**/ui/theme/**",
       "tags": ["theme", "core"]
     },

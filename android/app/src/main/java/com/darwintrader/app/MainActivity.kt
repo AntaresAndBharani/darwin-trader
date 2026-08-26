@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Settings
@@ -15,6 +16,7 @@ import androidx.lifecycle.lifecycleScope
 import com.darwintrader.app.data.api.ApiService
 import com.darwintrader.app.data.model.AccountInfo
 import com.darwintrader.app.data.model.Position
+import com.darwintrader.app.ui.account.AccountSettingsScreen
 import com.darwintrader.app.ui.backtest.BacktestScreen
 import com.darwintrader.app.ui.dashboard.DashboardScreen
 import com.darwintrader.app.ui.strategy.StrategyControlScreen
@@ -77,6 +79,12 @@ class MainActivity : ComponentActivity() {
                                 icon = { Icon(Icons.Default.Analytics, contentDescription = "Backtest") },
                                 label = { Text("Backtest") }
                             )
+                            NavigationBarItem(
+                                selected = selectedTab == 3,
+                                onClick = { selectedTab = 3 },
+                                icon = { Icon(Icons.Default.AccountCircle, contentDescription = "Account") },
+                                label = { Text("Account") }
+                            )
                         }
                     }
                 ) { innerPadding ->
@@ -107,6 +115,13 @@ class MainActivity : ComponentActivity() {
                             )
                             1 -> StrategyControlScreen()
                             2 -> BacktestScreen()
+                            3 -> AccountSettingsScreen(
+                                apiService = apiService,
+                                onAccountConnected = {
+                                    accountInfo = it
+                                    fetchTelemetry()
+                                }
+                            )
                         }
                     }
                 }
