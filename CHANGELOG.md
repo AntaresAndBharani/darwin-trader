@@ -13,11 +13,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Automated PowerShell test runner (`scripts/run-e2e-tests.ps1`) supporting `-Delta`, `-Tags`, `-CaptureArtifacts`, `-PushArtifacts`, auto-booting emulator, building snapshot APK, and generating summary reports.
   - Sticky PR evidence publisher (`scripts/post-e2e-evidence.ps1`) posting `<!-- e2e-evidence -->` markdown tables with pass/fail icons and screenshot links.
   - Unit test summarizer (`scripts/summarize-unit-tests.ps1`) parsing JUnit XML test results into sticky PR comments.
-- **Agentic SDLC Pipeline (5-Node Graph)**:
-  - Antigravity scheduled tasks (`.antigravity/tasks/dev-test.md`, `three-amigos.md`, `backlog-triage.md`).
+- **Agentic SDLC Pipeline (5-Node Graph & Local CLI Executor)**:
+  - Antigravity scheduled tasks and local prompt templates (`.antigravity/tasks/dev-test.md`, `dev-test-implement.md`, `dev-test-fixup.md`, `three-amigos.md`, `backlog-triage.md`).
+  - Claude CLI prompt templates in `.claude/tasks/` (`architect-decompose.md`, `architect-restructure.md`, `architect-answer-clarifications.md`, `pr-review.md`, `three-amigos-judge.md`).
+  - Local CLI Pipeline wrapper scripts in `scripts/local-pipeline/`:
+    - `run-backlog-triage.ps1`: Deterministic issue fetch/cluster/close with judgment-only `agy.exe` (Gemini 3.7 Flash Medium).
+    - `run-pr-review.ps1`: Head-SHA tracked PR review with judgment-only `claude.exe` (Claude Sonnet 5, `--tools ""`, `--effort medium`).
+    - `run-architect.ps1`: Multi-mode story decomposition with read-only `claude.exe` (Claude Opus 5 / Sonnet 5, `--tools "Read,Grep,Glob"`, `--effort medium`).
+    - `run-three-amigos-and-dev-test.ps1`: 5-step batch review, auto-rebase of approved conflicting PRs, agentic fix-up, in-flight concurrency gating, and new implementation.
+    - `register-local-tasks.ps1`: Windows Task Scheduler registration for `DT-BacklogTriage`, `DT-PRReview`, `DT-Architect`, and `DT-ThreeAmigosDevTest`.
   - Scoped agent personas (`.antigravity/agents/developer.md`, `tester.md`) and workspace rules (`.antigravity/rules.md`).
   - SMART GitHub issue templates (`.github/ISSUE_TEMPLATE/user-story.yml`, `subtask.yml`, `config.yml`).
   - Automated GitHub Actions workflows (`architect.yml`, `three-amigos.yml`, `dev-test.yml`, `pr-review.yml`, `merge.yml`) and prompt files in `.github/workflows/prompts/`.
-- **Project Documentation & Rules**:
+- **Project Configuration & Rules**:
+  - Configured `.gitattributes` with `CHANGELOG.md merge=union` and line ending normalizations.
+  - Updated `.gitignore` to ignore `logs/local-pipeline/`.
   - Created `GEMINI.md` defining development guidelines, quick commands, and Definition of Done.
   - Updated `README.md` with complete architecture, test commands, and pipeline documentation.

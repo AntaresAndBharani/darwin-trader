@@ -1,0 +1,8 @@
+# Custom merge drivers
+CHANGELOG.md merge=union
+
+# Line endings
+*.ps1 text eol=crlf
+*.sh text eol=lf
+*.kt text eol=lf
+*.py text eol=lf

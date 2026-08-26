@@ -15,6 +15,12 @@
 - **Full Pre-PR Verification Suite:** `cd android; .\gradlew.bat testSnapshotDebugUnitTest assembleSnapshot -PsnapshotLabel=localtest --no-daemon; cd ..`
 - **Run Targeted E2E Tests (Maestro):** `.\scripts\run-e2e-tests.ps1 -Delta`
 - **Capture & Publish E2E Artifacts:** `.\scripts\run-e2e-tests.ps1 -CaptureArtifacts -Version "latest" -PushArtifacts`
+- **Local Pipeline Nodes (CLI):**
+  - **Register All Scheduled Tasks:** `.\scripts\local-pipeline\register-local-tasks.ps1`
+  - **Run Backlog Triage:** `.\scripts\local-pipeline\run-backlog-triage.ps1`
+  - **Run PR Review:** `.\scripts\local-pipeline\run-pr-review.ps1`
+  - **Run Architect:** `.\scripts\local-pipeline\run-architect.ps1`
+  - **Run Three Amigos & Dev-Test:** `.\scripts\local-pipeline\run-three-amigos-and-dev-test.ps1`
 
 ## Core Development Guidelines
 1. **Architecture:**
