@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Dynamic MT5 Account Connect & Status Endpoints**:
+  - Added `POST /api/v1/account/connect` endpoint to configure MT5 credentials, toggle mock/live execution, and authenticate dynamically.
+  - Added `GET /api/v1/account/status` endpoint reporting connection state (`CONNECTED`, `DISCONNECTED`, `ERROR`), server mode, latency measurement in milliseconds, and error diagnostics.
+  - Extended `MT5Connector` with connection timestamping, latency calculation, disconnect capability, and comprehensive initialize/login error tracking.
+  - Added Pydantic models `AccountConnectRequest`, `AccountConnectResponse`, `ConnectionState`, and `ConnectionStatus` in `strategy_engine/models.py`.
 - **E2E Testing Framework with Maestro**:
   - Declarative E2E flows in `e2e/flows/` covering Dashboard metrics (`01_dashboard_flow.yaml`), Strategy parameters (`02_strategy_control_flow.yaml`), Backtest analytics (`03_backtest_analytics_flow.yaml`), and Navigation (`04_navigation_flow.yaml`).
   - Delta execution mapping (`e2e/flow-mapping.json`) mapping modified file globs across Android and Backend to targeted E2E tags.

@@ -6,12 +6,60 @@ from typing import Dict, Any, List
 
 from strategy_engine.config import StrategyConfig
 from strategy_engine.mt5_connector import MT5Connector
-from strategy_engine.models import AccountInfo, Position
+from strategy_engine.models import (
+    AccountInfo,
+    Position,
+    AccountConnectRequest,
+    AccountConnectResponse,
+    ConnectionStatus,
+)
 
 router = APIRouter(prefix="/api/v1/account", tags=["Account & Telemetry"])
 
 # Use shared connector from routes_strategy
 from .routes_strategy import connector, global_config
+
+
+@router.post("/connect", response_model=AccountConnectResponse)
+def connect_account(request: AccountConnectRequest) -> AccountConnectResponse:
+    global_config.mt5_login = request.login
+    global_config.mt5_password = request.password
+    global_config.mt5_server = request.server
+    if request.path:
+        global_config.mt5_path = request.path
+    global_config.mock_mode = request.mock_mode
+
+    success, message = connector.initialize()
+    if not success:
+        return AccountConnectResponse(
+            status="ERROR",
+            message=message,
+            login=request.login,
+            server=request.server,
+            trade_mode="DEMO" if "demo" in request.server.lower() else "REAL",
+            balance=0.0,
+            currency="USD",
+            account_info=None,
+            error=message,
+        )
+
+    acc = connector.get_account_info()
+    return AccountConnectResponse(
+        status="CONNECTED",
+        message=message,
+        login=acc.login,
+        server=acc.server,
+        trade_mode=acc.trade_mode,
+        balance=acc.balance,
+        currency=acc.currency,
+        account_info=acc,
+        error=None,
+    )
+
+
+@router.get("/status", response_model=ConnectionStatus)
+def get_connection_status() -> ConnectionStatus:
+    return connector.get_connection_status()
 
 
 @router.get("/info", response_model=AccountInfo)

@@ -5,11 +5,13 @@ from typing import List, Optional, Tuple
 from datetime import datetime
 import os
 import platform
+import time
 
 from .config import StrategyConfig
-from .models import AccountInfo, Position, OrderType, TradeSignal, SignalType
+from .models import AccountInfo, Position, OrderType, TradeSignal, SignalType, ConnectionStatus
 
 # Try importing MetaTrader5 (available on Windows platform)
+mt5 = None
 HAS_MT5 = False
 if platform.system() == "Windows":
     try:
@@ -23,6 +25,9 @@ class MT5Connector:
     def __init__(self, config: StrategyConfig):
         self.config = config
         self.is_connected = False
+        self.connected_at: Optional[datetime] = None
+        self.last_error: Optional[str] = None
+        self.latency_ms: float = 0.0
         # Mock internal state for dev mode
         self._mock_positions: List[Position] = []
         self._mock_balance: float = 100000.0
@@ -32,22 +37,90 @@ class MT5Connector:
         """
         Initializes connection to MT5 terminal or starts mock mode.
         """
+        start_time = time.perf_counter()
         if self.config.mock_mode or not HAS_MT5:
             self.is_connected = True
+            self.connected_at = datetime.utcnow()
+            self.last_error = None
+            self.latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
             return True, "Initialized MT5 in MOCK / Simulation Mode"
 
         # Live MT5 execution branch
-        if not mt5.initialize(
-            path=self.config.mt5_path,
-            login=self.config.mt5_login,
-            password=self.config.mt5_password,
-            server=self.config.mt5_server
-        ):
+        try:
+            init_success = mt5.initialize(
+                path=self.config.mt5_path,
+                login=self.config.mt5_login,
+                password=self.config.mt5_password,
+                server=self.config.mt5_server
+            )
+        except Exception as e:
+            self.is_connected = False
+            self.connected_at = None
+            self.last_error = f"MT5 initialize exception: {e}"
+            self.latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            return False, self.last_error
+
+        self.latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        if not init_success:
             error_code = mt5.last_error()
-            return False, f"MT5 initialize failed: {error_code}"
+            self.is_connected = False
+            self.connected_at = None
+            self.last_error = f"MT5 initialize failed: {error_code}"
+            return False, self.last_error
+
+        if self.config.mt5_login:
+            try:
+                login_success = mt5.login(
+                    login=self.config.mt5_login,
+                    password=self.config.mt5_password,
+                    server=self.config.mt5_server
+                )
+            except Exception as e:
+                self.is_connected = False
+                self.connected_at = None
+                self.last_error = f"MT5 login exception: {e}"
+                return False, self.last_error
+
+            if not login_success:
+                error_code = mt5.last_error()
+                self.is_connected = False
+                self.connected_at = None
+                self.last_error = f"MT5 login failed: {error_code}"
+                return False, self.last_error
 
         self.is_connected = True
+        self.connected_at = datetime.utcnow()
+        self.last_error = None
         return True, "Connected to MetaTrader 5 live terminal"
+
+    def disconnect(self) -> Tuple[bool, str]:
+        """
+        Disconnects from MT5 terminal.
+        """
+        if HAS_MT5 and not self.config.mock_mode:
+            try:
+                mt5.shutdown()
+            except Exception as e:
+                self.last_error = str(e)
+        self.is_connected = False
+        self.connected_at = None
+        return True, "Disconnected from MetaTrader 5"
+
+    def get_connection_status(self) -> ConnectionStatus:
+        """
+        Returns connection state, latency, server mode, and diagnostic info.
+        """
+        status_str = "CONNECTED" if self.is_connected else ("ERROR" if self.last_error else "DISCONNECTED")
+        acc = self.get_account_info() if self.is_connected else None
+        return ConnectionStatus(
+            status=status_str,
+            server=self.config.mt5_server,
+            mock_mode=self.config.mock_mode,
+            latency_ms=self.latency_ms,
+            connected_at=self.connected_at,
+            last_error=self.last_error,
+            account_info=acc
+        )
 
     def get_account_info(self) -> AccountInfo:
         """
@@ -55,9 +128,10 @@ class MT5Connector:
         """
         if self.config.mock_mode or not HAS_MT5 or not self.is_connected:
             floating_pnl = sum(p.pnl for p in self._mock_positions)
+            trade_mode = "DEMO" if "demo" in self.config.mt5_server.lower() else "REAL"
             return AccountInfo(
                 login=self.config.mt5_login or 1234567,
-                trade_mode="DEMO",
+                trade_mode=trade_mode,
                 server=self.config.mt5_server,
                 balance=self._mock_balance,
                 equity=self._mock_balance + floating_pnl,
