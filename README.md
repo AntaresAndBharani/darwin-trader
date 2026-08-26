@@ -83,6 +83,19 @@ Darwin Trader runs the full 5-node Agentic SDLC state graph:
 - **Merge & Backlog (Deterministic):** Auto-merges approved PRs and relabels/closes parent stories (`status:done`).
 - **Backlog Triage (Gemini 3.7 Flash):** Periodically clusters non-blocking `tech-debt` and `enhancement` issues into actionable user stories.
 
+### Local CLI Execution (Windows Task Scheduler)
+The autonomous nodes can be executed locally via Windows Task Scheduler using `scripts/local-pipeline/`:
+```powershell
+# Register all four scheduled tasks in Task Scheduler (DT-BacklogTriage, DT-PRReview, DT-Architect, DT-ThreeAmigosDevTest)
+.\scripts\local-pipeline\register-local-tasks.ps1
+
+# Run individual nodes on demand
+.\scripts\local-pipeline\run-backlog-triage.ps1
+.\scripts\local-pipeline\run-pr-review.ps1
+.\scripts\local-pipeline\run-architect.ps1
+.\scripts\local-pipeline\run-three-amigos-and-dev-test.ps1
+```
+
 ---
 
 ## 📋 Changelog
