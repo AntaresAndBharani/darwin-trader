@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **Default AccountConnectRequest.path to None with StrategyConfig Fallback**:
+  - Changed `AccountConnectRequest.path` in `strategy_engine/models.py` (and Android `Models.kt`) to default to `None` instead of a hardcoded path.
+  - Verified route fallback preserves configured `StrategyConfig.mt5_path` when `path` is omitted or `None`, while allowing explicit override.
+  - Added unit and API tests in `strategy_engine/tests/test_strategy.py`, `api_gateway/tests/test_api.py`, and `ModelsTest.kt`.
 - **ConnectionState Enum Typing on Account Connection Models**:
   - Typed `AccountConnectResponse.status` and `ConnectionStatus.status` as `ConnectionState` enum in `strategy_engine/models.py` to enforce strict validation against allowed states (`CONNECTED`, `DISCONNECTED`, `ERROR`).
   - Added unit test `test_connection_state_validation` in `strategy_engine/tests/test_strategy.py` verifying serialization and asserting `ValidationError` is raised for invalid status strings.

@@ -133,3 +133,57 @@ def test_account_connect_and_status_failure(monkeypatch):
     assert status_data["mock_mode"] is False
     assert status_data["last_error"] == data["error"]
     assert status_data["account_info"] is None
+
+
+def test_account_connect_path_fallback_preserves_config():
+    from api_gateway.routes_strategy import global_config
+
+    configured_path = "C:\\Configured\\Darwinex MetaTrader 5\\terminal64.exe"
+    global_config.mt5_path = configured_path
+
+    # Calling connect without 'path' field
+    resp = client.post(
+        "/api/v1/account/connect",
+        json={
+            "login": 123456,
+            "password": "pwd",
+            "server": "Darwinex-Demo",
+            "mock_mode": True,
+        },
+    )
+    assert resp.status_code == 200
+    assert global_config.mt5_path == configured_path
+
+    # Calling connect with explicit None 'path'
+    resp_none = client.post(
+        "/api/v1/account/connect",
+        json={
+            "login": 123456,
+            "password": "pwd",
+            "server": "Darwinex-Demo",
+            "path": None,
+            "mock_mode": True,
+        },
+    )
+    assert resp_none.status_code == 200
+    assert global_config.mt5_path == configured_path
+
+
+def test_account_connect_explicit_path_overrides_config():
+    from api_gateway.routes_strategy import global_config
+
+    global_config.mt5_path = "C:\\Default\\Path\\terminal64.exe"
+    explicit_path = "D:\\Custom\\MT5\\terminal64.exe"
+
+    resp = client.post(
+        "/api/v1/account/connect",
+        json={
+            "login": 654321,
+            "password": "pwd",
+            "server": "Darwinex-Demo",
+            "path": explicit_path,
+            "mock_mode": True,
+        },
+    )
+    assert resp.status_code == 200
+    assert global_config.mt5_path == explicit_path

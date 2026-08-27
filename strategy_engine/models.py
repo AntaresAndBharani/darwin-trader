@@ -98,7 +98,7 @@ class AccountConnectRequest(BaseModel):
     login: int = 0
     password: str = ""
     server: str = "Darwinex-Demo"
-    path: Optional[str] = "C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe"
+    path: Optional[str] = None
     mock_mode: bool = True
 
 
