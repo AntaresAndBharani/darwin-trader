@@ -133,9 +133,11 @@ function Invoke-NativeProcess {
 
 function ConvertFrom-JsonSafeArray {
     param([string]$JsonText)
+    if ([string]::IsNullOrWhiteSpace($JsonText)) { return , @() }
     $parsed = $JsonText | ConvertFrom-Json -ErrorAction Stop
-    if ($parsed -is [array]) { return $parsed }
-    return @($parsed)
+    if ($parsed -is [array]) { return , $parsed }
+    if ($null -eq $parsed) { return , @() }
+    return , @($parsed)
 }
 
 function ConvertTo-SafeString {
@@ -218,19 +220,19 @@ function Invoke-ThreeAmigosStep {
     }
     $stories = @()
     if (-not [string]::IsNullOrWhiteSpace($storiesResult.Output)) {
-        try { $stories = ConvertFrom-JsonSafeArray $storiesResult.Output } catch {
+        try { $stories = @(ConvertFrom-JsonSafeArray $storiesResult.Output) } catch {
             Write-Log "Failed to parse status:review stories JSON: $_" "ERROR"
             return
         }
     }
-    Write-Log "Found $($stories.Count) story/stories at status:review."
+    Write-Log "Found $(@($stories).Count) story/stories at status:review."
 
     $templatePath = Join-Path $PromptTemplateDir "three-amigos-judge.md"
-    if ($stories.Count -gt 0 -and -not (Test-Path -LiteralPath $templatePath)) {
+    if (@($stories).Count -gt 0 -and -not (Test-Path -LiteralPath $templatePath)) {
         Write-Log "Prompt template not found at $templatePath" "ERROR"
         return
     }
-    $template = if ($stories.Count -gt 0) { Get-Content -LiteralPath $templatePath -Raw } else { $null }
+    $template = if (@($stories).Count -gt 0) { Get-Content -LiteralPath $templatePath -Raw } else { $null }
 
     foreach ($story in $stories) {
         $storyNumber = $story.number
