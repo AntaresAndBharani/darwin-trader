@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **API Gateway Test Isolation Fixture & Deterministic Test Execution**:
+  - Added `api_gateway/tests/conftest.py` with an autouse `reset_shared_state` fixture resetting `connector`, `global_config` singleton, and `current_status` before and after each test.
+  - Added `pytest-randomly>=3.0.0` to `api_gateway/requirements.txt` to enforce order-independent and deterministic test execution across random seeds.
 - **Android Dashboard Live Connection Telemetry Badge**:
   - Updated `DashboardScreen.kt` with live connection status badge (`Connected (Live)`, `Connected (Demo)`, `Simulation`, `Disconnected`) and Account ID display sourced from connection telemetry alongside strategy status.
   - Extended `MainActivity.kt` telemetry polling loop (`LaunchedEffect`) and tab-switch triggers to fetch `GET /api/v1/account/status` via `ApiService.getAccountStatus()` and propagate live status to `DashboardScreen`.
