@@ -9,6 +9,9 @@ tags:
 - assertVisible: "Strategy Parameters"
 - tapOn: "Backtest"
 - assertVisible: "Backtest Analytics"
+- tapOn: "Account"
+- assertVisible: "Account & MT5 Connection"
 - tapOn: "Dashboard"
 - assertVisible: "Account Equity"
 - takeScreenshot: screenshots/04_navigation_complete
+

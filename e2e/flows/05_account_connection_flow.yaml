@@ -1,0 +1,13 @@
+appId: com.darwintrader.app.snapshot
+tags:
+  - account
+  - core
+---
+- launchApp:
+    clearState: false
+- tapOn: "Account"
+- assertVisible: "Account & MT5 Connection"
+- assertVisible: "Mock Simulation Mode"
+- tapOn: "TEST CONNECTION"
+- assertVisible: "CONNECTED"
+- takeScreenshot: screenshots/05_account_connection_complete

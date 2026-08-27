@@ -33,6 +33,12 @@ interface ApiService {
     @GET("api/v1/account/darwinex-stats")
     suspend fun getDarwinexStats(): Response<DarwinexStatsResponse>
 
+    @POST("api/v1/account/connect")
+    suspend fun connectAccount(@Body request: AccountConnectRequest): Response<AccountConnectResponse>
+
+    @GET("api/v1/account/status")
+    suspend fun getAccountStatus(): Response<AccountStatusResponse>
+
     companion object {
         private const val BASE_URL = "http://10.0.2.2:8000/" // Android Emulator localhost bridge
 

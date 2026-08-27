@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Android Account Settings & Connection Screen**:
+  - Added `AccountSettingsScreen.kt` Compose screen supporting MT5 login, password (with show/hide toggle), server selection, terminal path input, Mock/Live mode toggle, connection testing, and non-crashing troubleshooting guidance.
+  - Added `AccountConnectRequest`, `AccountConnectResponse`, and `AccountStatusResponse` data models in `Models.kt`.
+  - Added `connectAccount` and `getAccountStatus` suspend functions to `ApiService.kt`.
+  - Integrated `Account` navigation tab and state synchronization into `MainActivity.kt`.
+  - Added unit test suite `ModelsTest.kt` verifying serialization/deserialization across success and error response formats.
+  - Extended Maestro E2E test flows (`04_navigation_flow.yaml`, `05_account_connection_flow.yaml`) and delta flow mapping.
 - **Dynamic MT5 Account Connect & Status Endpoints**:
   - Added `POST /api/v1/account/connect` endpoint to configure MT5 credentials, toggle mock/live execution, and authenticate dynamically.
   - Added `GET /api/v1/account/status` endpoint reporting connection state (`CONNECTED`, `DISCONNECTED`, `ERROR`), server mode, latency measurement in milliseconds, and error diagnostics.
