@@ -23,3 +23,18 @@ def reset_shared_state():
     _reset()
     yield
     _reset()
+
+
+@pytest.fixture
+def preserve_mt5_path():
+    """
+    Explicit fixture that snapshots `global_config.mt5_path` before test execution
+    and restores the pre-test value after test completion, ensuring explicit test-local
+    teardown when tests mutate the MT5 terminal path.
+    """
+    original_path = global_config.mt5_path
+    try:
+        yield
+    finally:
+        global_config.mt5_path = original_path
+
