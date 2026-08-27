@@ -81,3 +81,58 @@ def test_mt5_connector_mock():
     count, kill_msg = connector.close_all_positions()
     assert count == 1
     assert len(connector.get_open_positions()) == 0
+
+
+def test_mt5_connector_status_and_disconnect():
+    config = StrategyConfig(mock_mode=True, mt5_server="Darwinex-Demo")
+    connector = MT5Connector(config)
+    assert connector.is_connected is False
+    status = connector.get_connection_status()
+    assert status.status == "DISCONNECTED"
+
+    ok, msg = connector.initialize()
+    assert ok is True
+    assert connector.is_connected is True
+    assert connector.connected_at is not None
+    assert connector.latency_ms >= 0.0
+
+    status = connector.get_connection_status()
+    assert status.status == "CONNECTED"
+    assert status.server == "Darwinex-Demo"
+    assert status.mock_mode is True
+    assert status.last_error is None
+    assert status.account_info is not None
+
+    ok_disc, msg_disc = connector.disconnect()
+    assert ok_disc is True
+    assert connector.is_connected is False
+    status = connector.get_connection_status()
+    assert status.status == "DISCONNECTED"
+
+
+def test_mt5_connector_live_init_failure(monkeypatch):
+    import strategy_engine.mt5_connector as mc
+    monkeypatch.setattr(mc, "HAS_MT5", True)
+
+    class FakeMT5:
+        @staticmethod
+        def initialize(**kwargs):
+            return False
+
+        @staticmethod
+        def last_error():
+            return (-10004, "Terminal not reachable")
+
+    monkeypatch.setattr(mc, "mt5", FakeMT5)
+
+    config = StrategyConfig(mock_mode=False, mt5_login=12345, mt5_password="bad", mt5_server="Darwinex-Live")
+    connector = MT5Connector(config)
+    ok, msg = connector.initialize()
+    assert ok is False
+    assert "MT5 initialize failed" in msg
+    assert connector.last_error is not None
+
+    status = connector.get_connection_status()
+    assert status.status == "ERROR"
+    assert status.last_error == msg
+    assert status.account_info is None

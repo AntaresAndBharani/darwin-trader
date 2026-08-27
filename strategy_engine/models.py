@@ -86,3 +86,39 @@ class StrategyState(BaseModel):
     daily_drawdown_pct: float = 0.0
     total_trades_today: int = 0
     active_magic: int = 20260811
+
+
+class ConnectionState(str, Enum):
+    CONNECTED = "CONNECTED"
+    DISCONNECTED = "DISCONNECTED"
+    ERROR = "ERROR"
+
+
+class AccountConnectRequest(BaseModel):
+    login: int = 0
+    password: str = ""
+    server: str = "Darwinex-Demo"
+    path: Optional[str] = "C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe"
+    mock_mode: bool = True
+
+
+class AccountConnectResponse(BaseModel):
+    status: str = "CONNECTED"
+    message: str = ""
+    login: int = 0
+    server: str = "Darwinex-Demo"
+    trade_mode: str = "DEMO"
+    balance: float = 100000.0
+    currency: str = "USD"
+    account_info: Optional[AccountInfo] = None
+    error: Optional[str] = None
+
+
+class ConnectionStatus(BaseModel):
+    status: str = "DISCONNECTED"
+    server: str = "Darwinex-Demo"
+    mock_mode: bool = True
+    latency_ms: float = 0.0
+    connected_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    account_info: Optional[AccountInfo] = None
