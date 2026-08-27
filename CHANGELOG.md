@@ -22,6 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **StrategyConfig.reset_from Helper for Safe Fixture State Reset**:
   - Added `StrategyConfig.reset_from(other, **overrides)` in `strategy_engine/config.py` enabling bulk resets of live configuration singleton instances without manipulating private Pydantic internals (`__dict__`, `__pydantic_fields_set__`).
   - Refactored `api_gateway/tests/conftest.py` autouse isolation fixture to use `global_config.reset_from()`.
+- **StrategyConfig.reset_from Helper & Test Isolation Fixture Refactoring**:
+  - Added `StrategyConfig.reset_from(other, **overrides)` in `strategy_engine/config.py` enabling bulk resets of live configuration singleton instances without manipulating private Pydantic internals (`__dict__`, `__pydantic_fields_set__`).
+  - Refactored `api_gateway/tests/conftest.py` autouse isolation fixture to use `global_config.reset_from()` rather than private Pydantic internals.
   - Added unit tests in `strategy_engine/tests/test_strategy.py` verifying field resets, default fallback, keyword overrides, and idempotency.
 - **API Gateway Test Isolation Fixture & Deterministic Test Execution**:
   - Added `api_gateway/tests/conftest.py` with an autouse `reset_shared_state` fixture resetting `connector`, `global_config` singleton, and `current_status` before and after each test.
