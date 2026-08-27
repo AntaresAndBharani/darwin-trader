@@ -136,7 +136,31 @@ function ConvertFrom-JsonSafeArray {
     if ([string]::IsNullOrWhiteSpace($JsonText) -or $JsonText.Trim() -eq "[]") {
         return , @()
     }
-    $parsed = $JsonText | ConvertFrom-Json -ErrorAction Stop
+    $parsed = $null
+    try {
+        $parsed = $JsonText | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        # Fallback to python json.loads for robust JSON parsing with invalid escapes
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = "python"
+            $psi.Arguments = "-c `"import json, sys; print(json.dumps(json.loads(sys.stdin.read()))))`""
+            $psi.RedirectStandardInput = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.UseShellExecute = $false
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $utf8Writer = New-Object System.IO.StreamWriter($proc.StandardInput.BaseStream, [System.Text.Encoding]::UTF8)
+            $utf8Writer.Write($JsonText)
+            $utf8Writer.Flush()
+            $utf8Writer.Close()
+            $stdout = $proc.StandardOutput.ReadToEnd()
+            $proc.WaitForExit()
+            if ($proc.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($stdout)) {
+                $parsed = ($stdout | ConvertFrom-Json -ErrorAction Stop)
+            }
+        } catch {}
+    }
     if ($null -eq $parsed) {
         return , @()
     }
@@ -346,7 +370,7 @@ function Invoke-ThreeAmigosStep {
 function Invoke-ConflictResolutionStep {
     Write-Log "--- Step 2: approved-but-conflicting PR check ---"
 
-    $prsResult = Invoke-GhCommand -GhArgs @("pr", "list", "--repo", $Repo, "--label", "review:approved", "--state", "open", "--json", "number,headRefName,mergeable,body")
+    $prsResult = Invoke-GhCommand -GhArgs @("pr", "list", "--repo", $Repo, "--label", "review:approved", "--state", "open", "--json", "number,headRefName,mergeable")
     if ($prsResult.ExitCode -ne 0) { return $false }
     $prs = @()
     if (-not [string]::IsNullOrWhiteSpace($prsResult.Output)) {
@@ -361,7 +385,8 @@ function Invoke-ConflictResolutionStep {
     $prNumber = $conflicting.number
     $branch = $conflicting.headRefName
     $subtaskNumber = $null
-    if ($conflicting.body -match '(?i)(close[sd]?|fixe?[sd]?|resolve[sd]?)\s*:?\s*#(\d+)') {
+    $bodyResult = Invoke-GhCommand -GhArgs @("pr", "view", $prNumber, "--repo", $Repo, "--json", "body", "-q", ".body")
+    if ($bodyResult.ExitCode -eq 0 -and $bodyResult.Output -match '(?i)(close[sd]?|fixe?[sd]?|resolve[sd]?)\s*:?\s*#(\d+)') {
         $subtaskNumber = $Matches[2]
     }
     Write-Log "Found approved-but-conflicting PR #$prNumber (branch $branch, subtask #$subtaskNumber) -- resolving."
