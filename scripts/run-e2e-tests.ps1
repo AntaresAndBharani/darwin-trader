@@ -86,6 +86,9 @@ if (-not $Devices) {
     }
     Write-Host "Waiting for device to boot..." -ForegroundColor Yellow
     & $AdbPath wait-for-device
+    while ((& $AdbPath shell getprop sys.boot_completed).Trim() -ne "1") {
+        Start-Sleep -Seconds 2
+    }
 }
 
 $OnlineDevice = (& $AdbPath devices | Where-Object { $_ -match "\bdevice$" } | Select-Object -First 1).Split("`t")[0]
@@ -192,15 +195,20 @@ if ($Tags.Count -gt 0) {
 Write-Host "`n[4/4] Running Maestro flows ($Flow)..." -ForegroundColor Yellow
 
 $BackendProcess = $null
+$BackendRunning = $false
 try {
-    $TestHttp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/v1/strategy/status" -TimeoutSec 2 -ErrorAction SilentlyContinue
+    $curlTest = & curl.exe -s --max-time 1 http://127.0.0.1:8000/api/v1/strategy/status 2>$null
+    if ($curlTest -and $curlTest.Contains("strategy_name")) {
+        $BackendRunning = $true
+    }
 } catch {
-    $TestHttp = $null
+    $BackendRunning = $false
 }
 
-if (-not $TestHttp) {
+if (-not $BackendRunning) {
     Write-Host "Starting local FastAPI gateway on 0.0.0.0:8000 for E2E tests..." -ForegroundColor Cyan
-    $BackendProcess = Start-Process -FilePath "python" -ArgumentList "-m", "uvicorn", "api_gateway.main:app", "--host", "0.0.0.0", "--port", "8000" -PassThru -WindowStyle Hidden
+    $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
+    $BackendProcess = Start-Process -FilePath "python" -ArgumentList "-m", "uvicorn", "api_gateway.main:app", "--host", "0.0.0.0", "--port", "8000" -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden
     Start-Sleep -Seconds 3
 }
 
@@ -268,6 +276,7 @@ try {
                 screenshot = $null
             }
         }
+        Start-Sleep -Seconds 1
     }
 } finally {
     if ($BackendProcess -and -not $BackendProcess.HasExited) {
