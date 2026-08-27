@@ -103,7 +103,7 @@ class AccountConnectRequest(BaseModel):
 
 
 class AccountConnectResponse(BaseModel):
-    status: str = "CONNECTED"
+    status: ConnectionState = ConnectionState.CONNECTED
     message: str = ""
     login: int = 0
     server: str = "Darwinex-Demo"
@@ -115,7 +115,7 @@ class AccountConnectResponse(BaseModel):
 
 
 class ConnectionStatus(BaseModel):
-    status: str = "DISCONNECTED"
+    status: ConnectionState = ConnectionState.DISCONNECTED
     server: str = "Darwinex-Demo"
     mock_mode: bool = True
     latency_ms: float = 0.0
