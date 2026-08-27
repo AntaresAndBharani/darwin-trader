@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **ConnectionState Enum Typing on Account Connection Models**:
+  - Typed `AccountConnectResponse.status` and `ConnectionStatus.status` as `ConnectionState` enum in `strategy_engine/models.py` to enforce strict validation against allowed states (`CONNECTED`, `DISCONNECTED`, `ERROR`).
+  - Added unit test `test_connection_state_validation` in `strategy_engine/tests/test_strategy.py` verifying serialization and asserting `ValidationError` is raised for invalid status strings.
+
 ### Added
 - **API Gateway Test Isolation Fixture & Deterministic Test Execution**:
   - Added `api_gateway/tests/conftest.py` with an autouse `reset_shared_state` fixture resetting `connector`, `global_config` singleton, and `current_status` before and after each test.

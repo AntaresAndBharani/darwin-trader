@@ -5,8 +5,19 @@ import pytest
 import pandas as pd
 from datetime import datetime
 
+from pydantic import ValidationError
+
 from strategy_engine.config import StrategyConfig
-from strategy_engine.models import SignalType, TradeSignal, AccountInfo, Position, OrderType
+from strategy_engine.models import (
+    SignalType,
+    TradeSignal,
+    AccountInfo,
+    Position,
+    OrderType,
+    ConnectionState,
+    AccountConnectResponse,
+    ConnectionStatus,
+)
 from strategy_engine.sample_strategy import DarwinTrendStrategy
 from strategy_engine.risk_manager import RiskManager
 from strategy_engine.backtester import Backtester, generate_mock_ohlcv
@@ -136,3 +147,29 @@ def test_mt5_connector_live_init_failure(monkeypatch):
     assert status.status == "ERROR"
     assert status.last_error == msg
     assert status.account_info is None
+
+
+def test_connection_state_validation():
+    for state in [ConnectionState.CONNECTED, ConnectionState.DISCONNECTED, ConnectionState.ERROR]:
+        resp = AccountConnectResponse(status=state)
+        assert resp.status == state
+        assert resp.model_dump()["status"] == state.value
+
+        resp_str = AccountConnectResponse(status=state.value)
+        assert resp_str.status == state
+        assert resp_str.model_dump()["status"] == state.value
+
+        conn = ConnectionStatus(status=state)
+        assert conn.status == state
+        assert conn.model_dump()["status"] == state.value
+
+        conn_str = ConnectionStatus(status=state.value)
+        assert conn_str.status == state
+        assert conn_str.model_dump()["status"] == state.value
+
+    with pytest.raises(ValidationError):
+        AccountConnectResponse(status="BOGUS")
+
+    with pytest.raises(ValidationError):
+        ConnectionStatus(status="BOGUS")
+
