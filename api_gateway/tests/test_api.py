@@ -187,3 +187,96 @@ def test_account_connect_explicit_path_overrides_config():
     )
     assert resp.status_code == 200
     assert global_config.mt5_path == explicit_path
+
+
+def test_concurrent_account_connect():
+    """
+    Verifies that concurrent POST /api/v1/account/connect requests maintain atomicity
+    and never produce a torn state in global_config or connector.
+    """
+    import concurrent.futures
+    from api_gateway.routes_strategy import global_config, connector
+
+    def send_connect(i: int):
+        login_val = 100000 + i
+        server_val = f"Darwinex-Server-{i}"
+        resp = client.post(
+            "/api/v1/account/connect",
+            json={
+                "login": login_val,
+                "password": f"pwd-{i}",
+                "server": server_val,
+                "mock_mode": True
+            }
+        )
+        return resp.status_code, resp.json()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(send_connect, i) for i in range(20)]
+        results = [f.result() for f in futures]
+
+    for status_code, data in results:
+        assert status_code == 200
+        assert data["status"] == "CONNECTED"
+        assert data["error"] is None
+
+    # Verify that final global_config and connector state match one atomic request
+    acc_info = connector.get_account_info()
+    assert global_config.mt5_login == acc_info.login
+    assert global_config.mt5_server == acc_info.server
+    # Verify login and server have matching index (no torn fields)
+    if global_config.mt5_login >= 100000:
+        idx = global_config.mt5_login - 100000
+        assert global_config.mt5_server == f"Darwinex-Server-{idx}"
+
+
+def test_concurrent_connect_and_status():
+    """
+    Verifies that GET /api/v1/account/status concurrent with POST /api/v1/account/connect
+    never observes a torn/partial state (e.g. CONNECTED with None connected_at or stale error).
+    """
+    import concurrent.futures
+    import threading
+
+    stop_event = threading.Event()
+    status_observations = []
+
+    def status_poller():
+        while not stop_event.is_set():
+            resp = client.get("/api/v1/account/status")
+            if resp.status_code == 200:
+                status_observations.append(resp.json())
+
+    def connect_worker(i: int):
+        login_val = 200000 + i
+        server_val = f"Darwinex-Demo-{i}"
+        return client.post(
+            "/api/v1/account/connect",
+            json={
+                "login": login_val,
+                "password": f"pwd-{i}",
+                "server": server_val,
+                "mock_mode": True
+            }
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        poller_future = executor.submit(status_poller)
+        connect_futures = [executor.submit(connect_worker, i) for i in range(15)]
+        for f in concurrent.futures.as_completed(connect_futures):
+            res = f.result()
+            assert res.status_code == 200
+        stop_event.set()
+        poller_future.result()
+
+    assert len(status_observations) > 0
+    for obs in status_observations:
+        if obs["status"] == "CONNECTED":
+            assert obs["connected_at"] is not None
+            assert obs["last_error"] is None
+            if obs["account_info"] is not None:
+                login_val = obs["account_info"]["login"]
+                if isinstance(login_val, int) and 200000 <= login_val < 200020:
+                    idx = login_val - 200000
+                    assert obs["server"] == f"Darwinex-Demo-{idx}"
+

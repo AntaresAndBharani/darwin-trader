@@ -185,3 +185,42 @@ def test_account_connect_request_path_default():
     req_custom = AccountConnectRequest(path="C:\\Custom\\MT5\\terminal64.exe")
     assert req_custom.path == "C:\\Custom\\MT5\\terminal64.exe"
 
+
+def test_mt5_connector_concurrency():
+    """
+    Verifies that concurrent calls to MT5Connector (initialize, execute_order,
+    get_connection_status, close_all_positions) are thread-safe and do not corrupt state.
+    """
+    import concurrent.futures
+
+    config = StrategyConfig(mock_mode=True, mt5_server="Darwinex-Demo")
+    connector = MT5Connector(config)
+    connector.initialize()
+
+    def place_orders(worker_id: int):
+        for j in range(5):
+            sig = TradeSignal(
+                symbol="EURUSD",
+                signal_type=SignalType.ENTER_LONG,
+                price=1.0800 + (worker_id * 0.001) + (j * 0.0001),
+                lot_size=0.01,
+                reason=f"worker-{worker_id}"
+            )
+            ok, msg = connector.execute_order(sig)
+            assert ok is True
+            status = connector.get_connection_status()
+            assert status.status == ConnectionState.CONNECTED
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(place_orders, i) for i in range(5)]
+        for f in concurrent.futures.as_completed(futures):
+            f.result()
+
+    positions = connector.get_open_positions()
+    assert len(positions) == 25
+
+    closed, msg = connector.close_all_positions()
+    assert closed == 25
+    assert len(connector.get_open_positions()) == 0
+
+
