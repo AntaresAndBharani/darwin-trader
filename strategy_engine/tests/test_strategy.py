@@ -224,3 +224,78 @@ def test_mt5_connector_concurrency():
     assert len(connector.get_open_positions()) == 0
 
 
+def test_strategy_config_reset_from_instance():
+    """
+    Given a StrategyConfig instance with mutated fields,
+    when .reset_from(StrategyConfig(mock_mode=True)) is called,
+    then all fields match the fresh instance's values without touching private internals.
+    """
+    config = StrategyConfig(
+        symbol="GBPUSD",
+        timeframe="H1",
+        risk_per_trade_pct=2.5,
+        max_daily_drawdown_pct=5.0,
+        mt5_login=987654,
+        mt5_server="Darwinex-Live",
+        mock_mode=False,
+        fast_ema_period=9,
+        slow_ema_period=21,
+    )
+
+    fresh = StrategyConfig(mock_mode=True)
+    res = config.reset_from(fresh)
+
+    assert res is config
+    assert config.symbol == "EURUSD"
+    assert config.timeframe == "M15"
+    assert config.risk_per_trade_pct == 1.0
+    assert config.max_daily_drawdown_pct == 3.0
+    assert config.mt5_login == 0
+    assert config.mt5_server == "Darwinex-Demo"
+    assert config.mock_mode is True
+    assert config.fast_ema_period == 12
+    assert config.slow_ema_period == 26
+    assert config.model_dump() == fresh.model_dump()
+
+
+def test_strategy_config_reset_from_defaults_and_overrides():
+    """
+    Verifies reset_from() with kwargs overrides and empty arguments resets to default values.
+    """
+    config = StrategyConfig(symbol="USDJPY", mock_mode=False, mt5_login=123)
+    config.reset_from(symbol="BTCUSD", mock_mode=True)
+
+    assert config.symbol == "BTCUSD"
+    assert config.mock_mode is True
+    assert config.mt5_login == 0
+
+    # Calling reset_from() without arguments restores defaults
+    config.reset_from()
+    assert config.symbol == "EURUSD"
+    assert config.mock_mode is True
+
+
+def test_strategy_config_reset_from_idempotency_and_side_effects():
+    """
+    Given reset_from(), when called repeatedly in sequence,
+    then it is idempotent and side-effect free beyond the target instance.
+    """
+    source = StrategyConfig(symbol="AUDUSD", mock_mode=True, fast_ema_period=8)
+    target = StrategyConfig()
+
+    # First call
+    target.reset_from(source)
+    assert target.symbol == "AUDUSD"
+    assert target.fast_ema_period == 8
+
+    # Second call (idempotent)
+    target.reset_from(source)
+    assert target.symbol == "AUDUSD"
+    assert target.fast_ema_period == 8
+
+    # Verify mutating source afterwards does not affect target
+    source.symbol = "NZDUSD"
+    assert target.symbol == "AUDUSD"
+
+
+
