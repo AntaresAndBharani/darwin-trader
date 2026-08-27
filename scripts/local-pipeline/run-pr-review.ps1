@@ -369,6 +369,9 @@ function Invoke-PrReviewJudge {
     if ($responseText -match '(?s)```(?:json)?\s*(.*?)\s*```') {
         $responseText = $Matches[1].Trim()
     }
+    if ($responseText -match '(?s)(\{.*\})') {
+        $responseText = $Matches[1].Trim()
+    }
 
     Write-Log "Judge response for PR #${PrNumber}: $responseText"
 
@@ -376,7 +379,29 @@ function Invoke-PrReviewJudge {
     try {
         $verdictObj = $responseText | ConvertFrom-Json -ErrorAction Stop
     } catch {
-        Write-Log "Failed to parse verdict JSON from judge response for PR #${PrNumber}: $_. Response: $responseText" "ERROR"
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = "python"
+            $psi.Arguments = "-c `"import json, sys; print(json.dumps(json.loads(sys.stdin.read()))))`""
+            $psi.RedirectStandardInput = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.UseShellExecute = $false
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $utf8Writer = New-Object System.IO.StreamWriter($proc.StandardInput.BaseStream, [System.Text.Encoding]::UTF8)
+            $utf8Writer.Write($responseText)
+            $utf8Writer.Flush()
+            $utf8Writer.Close()
+            $stdout = $proc.StandardOutput.ReadToEnd()
+            $proc.WaitForExit()
+            if ($proc.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($stdout)) {
+                $verdictObj = ($stdout | ConvertFrom-Json -ErrorAction Stop)
+            }
+        } catch {}
+    }
+
+    if ($null -eq $verdictObj) {
+        Write-Log "Failed to parse verdict JSON from judge response for PR #${PrNumber}. Response: $responseText" "ERROR"
         return $null
     }
 
