@@ -133,11 +133,20 @@ function Invoke-NativeProcess {
 
 function ConvertFrom-JsonSafeArray {
     param([string]$JsonText)
-    if ([string]::IsNullOrWhiteSpace($JsonText)) { return , @() }
+    if ([string]::IsNullOrWhiteSpace($JsonText) -or $JsonText.Trim() -eq "[]") {
+        return , @()
+    }
     $parsed = $JsonText | ConvertFrom-Json -ErrorAction Stop
-    if ($parsed -is [array]) { return , $parsed }
-    if ($null -eq $parsed) { return , @() }
-    return , @($parsed)
+    if ($null -eq $parsed) {
+        return , @()
+    }
+    $list = New-Object System.Collections.Generic.List[psobject]
+    foreach ($item in $parsed) {
+        if ($null -ne $item) {
+            $list.Add($item)
+        }
+    }
+    return , $list.ToArray()
 }
 
 function ConvertTo-SafeString {
@@ -220,19 +229,22 @@ function Invoke-ThreeAmigosStep {
     }
     $stories = @()
     if (-not [string]::IsNullOrWhiteSpace($storiesResult.Output)) {
-        try { $stories = @(ConvertFrom-JsonSafeArray $storiesResult.Output) } catch {
+        try { $stories = ConvertFrom-JsonSafeArray $storiesResult.Output } catch {
             Write-Log "Failed to parse status:review stories JSON: $_" "ERROR"
             return
         }
     }
-    Write-Log "Found $(@($stories).Count) story/stories at status:review."
+    Write-Log "Found $($stories.Count) story/stories at status:review."
+    if ($stories.Count -eq 0) {
+        return
+    }
 
     $templatePath = Join-Path $PromptTemplateDir "three-amigos-judge.md"
-    if (@($stories).Count -gt 0 -and -not (Test-Path -LiteralPath $templatePath)) {
+    if (-not (Test-Path -LiteralPath $templatePath)) {
         Write-Log "Prompt template not found at $templatePath" "ERROR"
         return
     }
-    $template = if (@($stories).Count -gt 0) { Get-Content -LiteralPath $templatePath -Raw } else { $null }
+    $template = Get-Content -LiteralPath $templatePath -Raw
 
     foreach ($story in $stories) {
         $storyNumber = $story.number
