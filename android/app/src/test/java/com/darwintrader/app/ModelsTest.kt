@@ -111,4 +111,62 @@ class ModelsTest {
         assertNotNull(status.accountInfo)
         assertEquals(55555L, status.accountInfo?.login)
     }
+
+    @Test
+    fun testConnectionBadgeText_liveConnected() {
+        val status = AccountStatusResponse(
+            status = "CONNECTED",
+            server = "Darwinex-Live",
+            mockMode = false
+        )
+        assertEquals("Connected (Live)", status.getConnectionBadgeText())
+    }
+
+    @Test
+    fun testConnectionBadgeText_demoConnected() {
+        val status = AccountStatusResponse(
+            status = "CONNECTED",
+            server = "Darwinex-Demo",
+            mockMode = false
+        )
+        assertEquals("Connected (Demo)", status.getConnectionBadgeText())
+    }
+
+    @Test
+    fun testConnectionBadgeText_simulation() {
+        val status = AccountStatusResponse(
+            status = "CONNECTED",
+            server = "Darwinex-Live",
+            mockMode = true
+        )
+        assertEquals("Simulation", status.getConnectionBadgeText())
+    }
+
+    @Test
+    fun testConnectionBadgeText_disconnected() {
+        val status = AccountStatusResponse(
+            status = "DISCONNECTED",
+            server = "Darwinex-Demo",
+            mockMode = true
+        )
+        assertEquals("Disconnected", status.getConnectionBadgeText())
+    }
+
+    @Test
+    fun testConnectionBadgeText_error() {
+        val status = AccountStatusResponse(
+            status = "ERROR",
+            server = "Darwinex-Live",
+            mockMode = false,
+            lastError = "Terminal not running"
+        )
+        assertEquals("Disconnected", status.getConnectionBadgeText())
+    }
+
+    @Test
+    fun testConnectionBadgeText_null() {
+        val status: AccountStatusResponse? = null
+        assertEquals("Disconnected", status.getConnectionBadgeText())
+    }
 }
+

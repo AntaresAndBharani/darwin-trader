@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Android Dashboard Live Connection Telemetry Badge**:
+  - Updated `DashboardScreen.kt` with live connection status badge (`Connected (Live)`, `Connected (Demo)`, `Simulation`, `Disconnected`) and Account ID display sourced from connection telemetry alongside strategy status.
+  - Extended `MainActivity.kt` telemetry polling loop (`LaunchedEffect`) and tab-switch triggers to fetch `GET /api/v1/account/status` via `ApiService.getAccountStatus()` and propagate live status to `DashboardScreen`.
+  - Added `getConnectionBadgeText()` helper extension on `AccountStatusResponse` in `Models.kt` mapping server mode, mock flag, and error status safely.
+  - Added unit test suite in `ModelsTest.kt` testing connection badge label derivation across Live, Demo, Simulation, Disconnected, and Error states.
+  - Updated `android/app/build.gradle.kts` snapshot flavor applicationId and added automatic local backend gateway launching in `scripts/run-e2e-tests.ps1` for end-to-end Maestro verification.
 - **Android Account Settings & Connection Screen**:
   - Added `AccountSettingsScreen.kt` Compose screen supporting MT5 login, password (with show/hide toggle), server selection, terminal path input, Mock/Live mode toggle, connection testing, and non-crashing troubleshooting guidance.
   - Added `AccountConnectRequest`, `AccountConnectResponse`, and `AccountStatusResponse` data models in `Models.kt`.

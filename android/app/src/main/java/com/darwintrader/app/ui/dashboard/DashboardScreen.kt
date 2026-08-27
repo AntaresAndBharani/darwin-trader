@@ -14,7 +14,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.darwintrader.app.data.model.AccountInfo
+import com.darwintrader.app.data.model.AccountStatusResponse
 import com.darwintrader.app.data.model.Position
+import com.darwintrader.app.data.model.getConnectionBadgeText
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -22,6 +24,7 @@ fun DashboardScreen(
     accountInfo: AccountInfo,
     positions: List<Position>,
     strategyStatus: String,
+    accountStatus: AccountStatusResponse? = null,
     onStartStrategy: () -> Unit,
     onPauseStrategy: () -> Unit,
     onKillSwitch: () -> Unit
@@ -51,12 +54,35 @@ fun DashboardScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    val connBadgeText = accountStatus.getConnectionBadgeText()
+                    val connBadgeBg = when (connBadgeText) {
+                        "Connected (Live)" -> Color(0xFF00E676)
+                        "Connected (Demo)" -> Color(0xFF29B6F6)
+                        "Simulation" -> Color(0xFFFFB300)
+                        else -> Color(0xFF757575)
+                    }
+                    val connBadgeTextColor = when (connBadgeText) {
+                        "Disconnected" -> Color.White
+                        else -> Color.Black
+                    }
+
+                    val effectiveLogin = accountStatus?.accountInfo?.login?.takeIf { it != 0L }
+                        ?: accountInfo.login.takeIf { it != 0L }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
+                            if (effectiveLogin != null) {
+                                Text(
+                                    "Account #$effectiveLogin",
+                                    fontSize = 12.sp,
+                                    color = Color.LightGray,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                             Text("Account Equity", fontSize = 12.sp, color = Color.Gray)
                             Text(
                                 "$${String.format("%.2f", accountInfo.equity)}",
@@ -65,20 +91,57 @@ fun DashboardScreen(
                                 color = MaterialTheme.colorScheme.primary
                             )
                         }
-                        Box(
-                            modifier = Modifier
-                                .background(
-                                    if (strategyStatus == "RUNNING") Color(0xFF00E676) else Color(0xFFFFB300),
-                                    shape = RoundedCornerShape(8.dp)
-                                )
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
+
+                        Column(
+                            horizontalAlignment = Alignment.End,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Text(
-                                strategyStatus,
-                                color = Color.Black,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Connection Status Badge
+                                Box(
+                                    modifier = Modifier
+                                        .background(
+                                            connBadgeBg,
+                                            shape = RoundedCornerShape(8.dp)
+                                        )
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        connBadgeText,
+                                        color = connBadgeTextColor,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+
+                                // Strategy Status Badge
+                                Box(
+                                    modifier = Modifier
+                                        .background(
+                                            if (strategyStatus == "RUNNING") Color(0xFF00E676) else Color(0xFFFFB300),
+                                            shape = RoundedCornerShape(8.dp)
+                                        )
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        strategyStatus,
+                                        color = Color.Black,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                            if (effectiveLogin != null) {
+                                Text(
+                                    "ID: $effectiveLogin",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray,
+                                    fontWeight = FontWeight.Normal
+                                )
+                            }
                         }
                     }
 
