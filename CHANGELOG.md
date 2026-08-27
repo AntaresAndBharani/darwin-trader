@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Added unit test `test_connection_state_validation` in `strategy_engine/tests/test_strategy.py` verifying serialization and asserting `ValidationError` is raised for invalid status strings.
 
 ### Added
+- **StrategyConfig.reset_from Helper for Safe Fixture State Reset**:
+  - Added `StrategyConfig.reset_from(other, **overrides)` in `strategy_engine/config.py` enabling bulk resets of live configuration singleton instances without manipulating private Pydantic internals (`__dict__`, `__pydantic_fields_set__`).
+  - Refactored `api_gateway/tests/conftest.py` autouse isolation fixture to use `global_config.reset_from()`.
+  - Added unit tests in `strategy_engine/tests/test_strategy.py` verifying field resets, default fallback, keyword overrides, and idempotency.
 - **API Gateway Test Isolation Fixture & Deterministic Test Execution**:
   - Added `api_gateway/tests/conftest.py` with an autouse `reset_shared_state` fixture resetting `connector`, `global_config` singleton, and `current_status` before and after each test.
   - Added `pytest-randomly>=3.0.0` to `api_gateway/requirements.txt` to enforce order-independent and deterministic test execution across random seeds.

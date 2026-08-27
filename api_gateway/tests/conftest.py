@@ -15,12 +15,7 @@ def reset_shared_state():
     state before and after each test for full test isolation.
     """
     def _reset():
-        fresh_config = StrategyConfig(mock_mode=True)
-        global_config.__dict__.clear()
-        global_config.__dict__.update(fresh_config.__dict__)
-        if hasattr(global_config, "__pydantic_fields_set__"):
-            global_config.__pydantic_fields_set__.clear()
-            global_config.__pydantic_fields_set__.update(fresh_config.__pydantic_fields_set__)
+        global_config.reset_from(StrategyConfig(mock_mode=True))
         connector.__init__(global_config)
         connector.initialize()
         routes_strategy.current_status = StrategyStatus.IDLE

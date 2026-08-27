@@ -36,6 +36,19 @@ class StrategyConfig(BaseModel):
     mt5_server: str = os.getenv("MT5_SERVER", "Darwinex-Demo")
     mt5_path: str = os.getenv("MT5_PATH", "C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe")
 
+    def reset_from(self, other: "StrategyConfig | None" = None, **overrides) -> "StrategyConfig":
+        """
+        Reset instance fields to match another StrategyConfig instance or fresh defaults with optional overrides.
+        Avoids directly manipulating private pydantic internals like __dict__ and __pydantic_fields_set__.
+        """
+        if other is not None:
+            source = other.model_copy(update=overrides) if overrides else other
+        else:
+            source = StrategyConfig(**overrides)
+        for key, value in source.model_dump().items():
+            setattr(self, key, value)
+        return self
+
 
 # Default global instance
 default_config = StrategyConfig()
