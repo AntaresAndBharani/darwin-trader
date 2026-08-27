@@ -107,7 +107,8 @@ function ConvertTo-SafeString {
 function Invoke-NativeProcess {
     param(
         [string]$FilePath,
-        [string[]]$ArgumentStrings
+        [string[]]$ArgumentStrings,
+        [string]$StandardInput = $null
     )
 
     $argLine = ($ArgumentStrings | ForEach-Object { ConvertTo-EscapedArgument $_ }) -join ' '
@@ -115,6 +116,9 @@ function Invoke-NativeProcess {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $FilePath
     $psi.Arguments = $argLine
+    if ($null -ne $StandardInput) {
+        $psi.RedirectStandardInput = $true
+    }
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.UseShellExecute = $false
@@ -122,6 +126,12 @@ function Invoke-NativeProcess {
     $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
 
     $proc = [System.Diagnostics.Process]::Start($psi)
+    if ($null -ne $StandardInput) {
+        $utf8Writer = New-Object System.IO.StreamWriter($proc.StandardInput.BaseStream, [System.Text.Encoding]::UTF8)
+        $utf8Writer.Write($StandardInput)
+        $utf8Writer.Flush()
+        $utf8Writer.Close()
+    }
     $stdout = $proc.StandardOutput.ReadToEnd()
     $stderr = $proc.StandardError.ReadToEnd()
     $proc.WaitForExit()
@@ -324,7 +334,8 @@ function Invoke-PrReviewJudge {
     Write-Log "Invoking claude.exe (model=$Model) for PR #$PrNumber..."
     $result = $null
     try {
-        $result = Invoke-NativeProcess -FilePath $ClaudePath -ArgumentStrings @("--model", $Model, "--effort", "medium", "--output-format", "json", "--tools", "", "--print", $prompt)
+        $args = @("--model", $Model, "--effort", "medium", "--output-format", "json", "--tools", "", "-p")
+        $result = Invoke-NativeProcess -FilePath $ClaudePath -ArgumentStrings $args -StandardInput $prompt
     } catch {
         Write-Log "claude.exe invocation threw for PR #${PrNumber}: $_" "ERROR"
         return $null
