@@ -135,7 +135,7 @@ def test_account_connect_and_status_failure(monkeypatch):
     assert status_data["account_info"] is None
 
 
-def test_account_connect_path_fallback_preserves_config():
+def test_account_connect_path_fallback_preserves_config(preserve_mt5_path):
     from api_gateway.routes_strategy import global_config
 
     configured_path = "C:\\Configured\\Darwinex MetaTrader 5\\terminal64.exe"
@@ -169,7 +169,7 @@ def test_account_connect_path_fallback_preserves_config():
     assert global_config.mt5_path == configured_path
 
 
-def test_account_connect_explicit_path_overrides_config():
+def test_account_connect_explicit_path_overrides_config(preserve_mt5_path):
     from api_gateway.routes_strategy import global_config
 
     global_config.mt5_path = "C:\\Default\\Path\\terminal64.exe"
