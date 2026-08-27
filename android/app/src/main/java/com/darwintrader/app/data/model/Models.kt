@@ -57,7 +57,7 @@ data class AccountConnectRequest(
     @SerializedName("login") val login: Long = 0,
     @SerializedName("password") val password: String = "",
     @SerializedName("server") val server: String = "Darwinex-Demo",
-    @SerializedName("path") val path: String? = "C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe",
+    @SerializedName("path") val path: String? = null,
     @SerializedName("mock_mode") val mockMode: Boolean = true
 )
 

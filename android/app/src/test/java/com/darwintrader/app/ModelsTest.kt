@@ -28,6 +28,15 @@ class ModelsTest {
     }
 
     @Test
+    fun testAccountConnectRequestDefaultPath() {
+        val request = AccountConnectRequest(
+            login = 123456L,
+            password = "securePassword"
+        )
+        assertNull(request.path)
+    }
+
+    @Test
     fun testAccountConnectResponseDeserialization_success() {
         val json = """
             {

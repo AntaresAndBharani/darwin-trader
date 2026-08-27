@@ -15,6 +15,7 @@ from strategy_engine.models import (
     Position,
     OrderType,
     ConnectionState,
+    AccountConnectRequest,
     AccountConnectResponse,
     ConnectionStatus,
 )
@@ -172,4 +173,15 @@ def test_connection_state_validation():
 
     with pytest.raises(ValidationError):
         ConnectionStatus(status="BOGUS")
+
+
+def test_account_connect_request_path_default():
+    req_default = AccountConnectRequest()
+    assert req_default.path is None
+
+    req_none = AccountConnectRequest(path=None)
+    assert req_none.path is None
+
+    req_custom = AccountConnectRequest(path="C:\\Custom\\MT5\\terminal64.exe")
+    assert req_custom.path == "C:\\Custom\\MT5\\terminal64.exe"
 
