@@ -135,6 +135,10 @@ def test_mt5_connector_live_init_failure(monkeypatch):
         def last_error():
             return (-10004, "Terminal not reachable")
 
+        @staticmethod
+        def shutdown():
+            pass
+
     monkeypatch.setattr(mc, "mt5", FakeMT5)
 
     config = StrategyConfig(mock_mode=False, mt5_login=12345, mt5_password="bad", mt5_server="Darwinex-Live")
@@ -148,6 +152,37 @@ def test_mt5_connector_live_init_failure(monkeypatch):
     assert status.status == "ERROR"
     assert status.last_error == msg
     assert status.account_info is None
+
+    # Verify disconnect clears last_error and transitions status back to DISCONNECTED (Issue #10)
+    disc_ok, disc_msg = connector.disconnect()
+    assert disc_ok is True
+    assert connector.last_error is None
+    status_after_disc = connector.get_connection_status()
+    assert status_after_disc.status == "DISCONNECTED"
+    assert status_after_disc.last_error is None
+    assert status_after_disc.account_info is None
+
+
+def test_mt5_connector_disconnect_clears_prior_error():
+    """
+    Given an MT5 connector with a prior error (e.g. failed connect),
+    When disconnect() is explicitly invoked,
+    Then last_error is cleared and get_connection_status() reports DISCONNECTED instead of ERROR.
+    """
+    config = StrategyConfig(mock_mode=True)
+    connector = MT5Connector(config)
+    connector.last_error = "Prior connection failed"
+    status_before = connector.get_connection_status()
+    assert status_before.status == "ERROR"
+    assert status_before.last_error == "Prior connection failed"
+
+    ok, msg = connector.disconnect()
+    assert ok is True
+    assert connector.last_error is None
+    assert connector.is_connected is False
+    status_after = connector.get_connection_status()
+    assert status_after.status == "DISCONNECTED"
+    assert status_after.last_error is None
 
 
 def test_connection_state_validation():
@@ -296,6 +331,105 @@ def test_strategy_config_reset_from_idempotency_and_side_effects():
     # Verify mutating source afterwards does not affect target
     source.symbol = "NZDUSD"
     assert target.symbol == "AUDUSD"
+
+
+def test_strategy_config_drawdown_warning_pct():
+    """
+    Given StrategyConfig default instantiation,
+    Then drawdown_warning_pct is present with default value 2.5.
+    """
+    config = StrategyConfig()
+    assert hasattr(config, "drawdown_warning_pct")
+    assert config.drawdown_warning_pct == 2.5
+
+    # Can be customized
+    custom = StrategyConfig(drawdown_warning_pct=2.0)
+    assert custom.drawdown_warning_pct == 2.0
+
+
+def test_mt5_error_messages_mapping():
+    """
+    Verify MT5_ERROR_MESSAGES dictionary maps expected codes to human-readable strings.
+    """
+    from strategy_engine.mt5_connector import MT5_ERROR_MESSAGES, format_mt5_error
+
+    assert 1 in MT5_ERROR_MESSAGES
+    assert MT5_ERROR_MESSAGES[1] == "Invalid account credentials or authorization failed"
+    assert -10004 in MT5_ERROR_MESSAGES
+    assert MT5_ERROR_MESSAGES[-10004] == "Terminal not reachable or IPC connection failed"
+    assert -10003 in MT5_ERROR_MESSAGES
+    assert -10005 in MT5_ERROR_MESSAGES
+
+    # Test format_mt5_error
+    formatted_1 = format_mt5_error((1, "Authorization failed"))
+    assert "MT5 Error 1" in formatted_1
+    assert "Invalid account credentials" in formatted_1
+
+    formatted_10004 = format_mt5_error(-10004)
+    assert formatted_10004 == "MT5 Error -10004: Terminal not reachable or IPC connection failed"
+
+    # Unknown error code fallback
+    formatted_unknown = format_mt5_error((-99999, "Custom internal message"))
+    assert "MT5 Error -99999: Custom internal message" in formatted_unknown
+
+
+def test_mt5_connector_attach_to_running_instance(monkeypatch):
+    """
+    Given MT5 terminal is already running,
+    When MT5Connector.initialize() is called without password,
+    Then it attaches directly via mt5.initialize(path=...) without spawning/calling login.
+    """
+    import strategy_engine.mt5_connector as mc
+    monkeypatch.setattr(mc, "HAS_MT5", True)
+
+    calls = {"initialize": [], "login": []}
+
+    class FakeRunningMT5:
+        @staticmethod
+        def initialize(**kwargs):
+            calls["initialize"].append(kwargs)
+            return True
+
+        @staticmethod
+        def login(**kwargs):
+            calls["login"].append(kwargs)
+            return True
+
+        @staticmethod
+        def last_error():
+            return (0, "")
+
+        @staticmethod
+        def account_info():
+            from collections import namedtuple
+            Acc = namedtuple("Acc", ["login", "trade_mode", "server", "balance", "equity", "margin", "margin_free", "profit", "currency"])
+            return Acc(4000073238, 2, "Darwinex-Live", 1044115.25, 1044115.25, 0.0, 1044115.25, 0.0, "USD")
+
+    monkeypatch.setattr(mc, "mt5", FakeRunningMT5)
+
+    config = StrategyConfig(
+        mock_mode=False,
+        mt5_login=4000073238,
+        mt5_password="",  # No password supplied: attach to running instance
+        mt5_server="Darwinex-Live",
+        mt5_path="C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe"
+    )
+    connector = MT5Connector(config)
+    ok, msg = connector.initialize()
+
+    assert ok is True
+    assert "Connected to MetaTrader 5 live terminal" in msg
+    assert connector.is_connected is True
+    assert len(calls["initialize"]) == 1
+    assert calls["initialize"][0]["path"] == "C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe"
+    # Login should NOT be invoked when no password is provided
+    assert len(calls["login"]) == 0
+
+    # Account info reflects attached session
+    info = connector.get_account_info()
+    assert info.login == 4000073238
+    assert info.server == "Darwinex-Live"
+    assert info.trade_mode == "REAL"
 
 
 

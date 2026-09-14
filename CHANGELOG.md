@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **MetaTrader5 Dependency & Live IPC Connector Hardening (Issue #61)**:
+  - Installed `MetaTrader5` on Windows environment and verified live terminal connectivity.
+  - Implemented `MT5_ERROR_MESSAGES` dictionary and `format_mt5_error()` in `strategy_engine/mt5_connector.py` for comprehensive human-readable error diagnostics across IPC, authentication, and timeout failure modes.
+  - Hardened `MT5Connector.initialize()` to support seamless attach-to-running-instance without requiring password re-entry when an active MT5 terminal session is running.
+  - Added configurable `drawdown_warning_pct = 2.5` to `StrategyConfig` to establish a 0.5% safety buffer before the hard 3.0% DarwinX Zero daily limit.
+  - Added comprehensive unit tests in `strategy_engine/tests/test_strategy.py` covering error message mapping, attach-to-running-instance IPC path, and drawdown warning threshold.
+
 ### Changed
 - **Default AccountConnectRequest.path to None with StrategyConfig Fallback**:
   - Changed `AccountConnectRequest.path` in `strategy_engine/models.py` (and Android `Models.kt`) to default to `None` instead of a hardcoded path.
