@@ -77,11 +77,16 @@ class StrategyPanel(Container):
         color: $error;
     }
 
-    .drawdown-normal {
+    .drawdown-normal, .drawdown-safe {
         color: $success;
     }
 
     .drawdown-warning {
+        color: $warning;
+        text-style: bold;
+    }
+
+    .drawdown-breach {
         color: $error;
         text-style: bold;
     }
@@ -113,7 +118,7 @@ class StrategyPanel(Container):
                 yield Static("Darwin_Trend_ATR_V1 (EURUSD)", id="strategy-name-value", classes="item-value")
             with Container(classes="strategy-item"):
                 yield Static("DAILY DRAWDOWN", classes="item-label")
-                yield Static("0.00%", id="strategy-drawdown-value", classes="item-value drawdown-normal")
+                yield Static("0.00% / 3.00% [● SAFE]", id="strategy-drawdown-value", classes="item-value drawdown-normal drawdown-safe")
             with Container(classes="strategy-item"):
                 yield Static("TOTAL EXPOSURE", classes="item-label")
                 yield Static("0.00 lots", id="strategy-exposure-value", classes="item-value")
@@ -172,12 +177,20 @@ class StrategyPanel(Container):
         name_widget.update(f"{self._strategy_name} ({self._symbol})")
 
         # Update drawdown
-        drawdown_widget.remove_class("drawdown-normal", "drawdown-warning")
-        drawdown_widget.update(f"{self._drawdown_pct:.2f}%")
-        if self._drawdown_pct >= 3.0:
+        drawdown_widget.remove_class("drawdown-normal", "drawdown-safe", "drawdown-warning", "drawdown-breach")
+        max_limit = 3.00
+        warn_limit = 2.50
+        if self._drawdown_pct >= max_limit:
+            badge = "[⛔ BREACH]"
+            drawdown_widget.add_class("drawdown-warning", "drawdown-breach")
+        elif self._drawdown_pct >= warn_limit:
+            badge = "[⚠ WARNING]"
             drawdown_widget.add_class("drawdown-warning")
         else:
-            drawdown_widget.add_class("drawdown-normal")
+            badge = "[● SAFE]"
+            drawdown_widget.add_class("drawdown-normal", "drawdown-safe")
+
+        drawdown_widget.update(f"{self._drawdown_pct:.2f}% / {max_limit:.2f}% {badge}")
 
         # Update exposure
         if positions is not None:

@@ -1,20 +1,28 @@
 """
 Unit and integration tests for Darwin Trader TUI.
-Comprehensive BDD coverage across all 9 Gherkin scenarios:
-- Scenario 1: Live Telemetry & Financial Metric Synchronization (test_live_telemetry_synchronization_scenario_1, test_summary_cards_dual_glyph_and_formatting)
-- Scenario 2: Active Positions Display and Dynamic Cell Updates (test_positions_table_rendering_and_in_place_updates)
-- Scenario 3: Account Switching via Connection Modal with Dual Keybindings (test_connect_modal_success_and_account_switching_scenario_3, test_app_keybindings_f2_and_c)
-- Scenario 4: Safeguarded Emergency Kill Switch with Open Positions (test_kill_switch_with_open_positions_scenario_4)
-- Scenario 5: Backend Offline at Launch & Resilient Reconnect Loop (test_backend_offline_at_launch_and_reconnect_loop_scenario_5, test_api_client_offline_fallback_status)
-- Scenario 6: Invalid Credentials Handling in Connect Modal (test_connect_modal_error_banner_scenario_6)
-- Scenario 7: Responsive Terminal Layout Below 80 Columns (test_responsive_layout_collapse_below_80_columns)
-- Scenario 8: Kill-Switch Invocation with Zero Open Positions (test_kill_switch_with_zero_positions_scenario_8)
-- Scenario 9: Simulation Mode Telemetry & Badge (test_simulation_mode_telemetry_and_badge_scenario_9, test_header_bar_badge_modes)
+Comprehensive BDD coverage across:
+- Issue #60 DarwinX Zero BDD Scenarios (1 to 6):
+  * Scenario 1: Automatic Detection of Darwinex MT5 Installation (test_connect_modal_autodetection_and_account_pinning_terminal_exists)
+  * Scenario 2: Live MT5 IPC Connection for Account 4000073238 on Darwinex-Live (test_live_mt5_ipc_connection_account_4000073238_scenario_2)
+  * Scenario 3: Attach to Already-Running MT5 Terminal Instance Without Password (test_mt5_attach_to_running_terminal_without_password_scenario_3)
+  * Scenario 4: Terminal Error Diagnostic Mapping (test_terminal_error_diagnostic_mapping_scenario_4)
+  * Scenario 5: Darwinex Zero Risk Limits Visibility & Buffer Warning (test_darwinex_zero_risk_limits_and_buffer_warning_scenario_5)
+  * Scenario 6: Graceful Mock Fallback on Non-Windows or Missing Dependency (test_graceful_mock_fallback_non_windows_or_missing_dep_scenario_6)
+- Core TUI Functional Scenarios:
+  * Live Telemetry & Financial Metric Synchronization (test_live_telemetry_synchronization_scenario_1, test_summary_cards_dual_glyph_and_formatting)
+  * Active Positions Display and Dynamic Cell Updates (test_positions_table_rendering_and_in_place_updates)
+  * Account Switching via Connection Modal with Dual Keybindings (test_connect_modal_success_and_account_switching_scenario_3, test_app_keybindings_f2_and_c)
+  * Safeguarded Emergency Kill Switch with Open Positions (test_kill_switch_with_open_positions_scenario_4)
+  * Backend Offline at Launch & Resilient Reconnect Loop (test_backend_offline_at_launch_and_reconnect_loop_scenario_5, test_api_client_offline_fallback_status)
+  * Invalid Credentials Handling in Connect Modal (test_connect_modal_error_banner_scenario_6)
+  * Responsive Terminal Layout Below 80 Columns (test_responsive_layout_collapse_below_80_columns)
+  * Kill-Switch Invocation with Zero Open Positions (test_kill_switch_with_zero_positions_scenario_8)
+  * Simulation Mode Telemetry & Badge (test_simulation_mode_telemetry_and_badge_scenario_9, test_header_bar_badge_modes)
 """
 import pytest
 import httpx
 from unittest.mock import AsyncMock
-from textual.widgets import Button, Checkbox, Input, Select
+from textual.widgets import Button, Checkbox, Input, Select, Static
 
 
 from strategy_engine.models import (
@@ -1084,6 +1092,313 @@ async def test_connect_modal_submit_submits_pinned_account_request(monkeypatch):
         assert req.server == "Darwinex-Live"
         assert req.path == r"C:\Program Files\Darwinex MetaTrader 5\terminal64.exe"
         assert req.mock_mode is False
+
+
+# =============================================================================
+# Issue #60: DarwinX Zero BDD Test Suite (Scenarios 2 to 6)
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_live_mt5_ipc_connection_account_4000073238_scenario_2():
+    """
+    Scenario 2: Live MT5 IPC Connection for Account 4000073238 on Darwinex-Live
+    Given the MetaTrader5 Python package is installed on Windows
+    And the user submits Login "4000073238" on server "Darwinex-Live" with Mock Mode unchecked
+    When the backend executes mt5.initialize() targeting the Darwinex terminal
+    Then the TUI displays a green "[● CONNECTED (LIVE)]" status badge with server "Darwinex-Live" and Login "4000073238"
+    And the SummaryCards display real account Balance, Equity, Margin, and Free Margin fetched from MT5
+    And the StrategyPanel displays active Drawdown percentage against the strict 3.0% DarwinX Zero limit.
+    """
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    acc_info = AccountInfo(
+        login=4000073238,
+        server="Darwinex-Live",
+        trade_mode="REAL",
+        balance=1044115.25,
+        equity=1042000.00,
+        margin=5000.0,
+        free_margin=1037000.0,
+    )
+    status_connected = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        mock_mode=False,
+        latency_ms=15.2,
+        account_info=acc_info,
+    )
+    mock_client.get_account_status.return_value = status_connected
+    mock_client.get_account_info.return_value = acc_info
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {
+        "status": "RUNNING",
+        "strategy_name": "Darwin_Trend_ATR_V1",
+        "symbol": "EURUSD",
+        "account_balance": 1044115.25,
+        "account_equity": 1042000.00,  # ~0.20% drawdown
+    }
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+
+        # Check HeaderBar
+        header = app.query_one(HeaderBar)
+        badge = header.query_one("#status-badge")
+        assert "[● CONNECTED (LIVE)]" in str(badge.content)
+        assert "status-connected-live" in badge.classes
+
+        info_text = header.query_one("#telemetry-info")
+        assert "Darwinex-Live" in str(info_text.content)
+        assert "4000073238" in str(info_text.content)
+
+        # Check SummaryCards
+        summary = app.query_one(SummaryCards)
+        val_balance = summary.query_one("#card-balance-value")
+        val_equity = summary.query_one("#card-equity-value")
+        val_margin = summary.query_one("#card-margin-value")
+
+        assert "1,044,115.25" in str(val_balance.content)
+        assert "1,042,000.00" in str(val_equity.content)
+        assert "5,000.00" in str(val_margin.content)
+
+        # Check StrategyPanel drawdown against strict 3.0% DarwinX Zero limit
+        strat = app.query_one(StrategyPanel)
+        dd_widget = strat.query_one("#strategy-drawdown-value")
+        assert "3.00%" in str(dd_widget.content)
+        assert "0.20%" in str(dd_widget.content)
+        assert "[● SAFE]" in str(dd_widget.content)
+        assert "drawdown-safe" in dd_widget.classes
+
+
+@pytest.mark.asyncio
+async def test_mt5_attach_to_running_terminal_without_password_scenario_3(monkeypatch):
+    """
+    Scenario 3: Attach to Already-Running MT5 Terminal Instance Without Password
+    Given the Darwinex MetaTrader 5 application is already running on the laptop with an active session for 4000073238
+    When the user clicks "Connect" in the TUI without entering a password
+    Then the backend calls mt5.initialize() without spawning a new process
+    And successfully attaches to the existing terminal session via local Win32 IPC
+    And live account telemetry populates immediately without prompting for password re-entry.
+    """
+    import os
+    monkeypatch.setattr(os.path, "exists", lambda path: True)
+
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    acc_info = AccountInfo(
+        login=4000073238,
+        server="Darwinex-Live",
+        trade_mode="REAL",
+        balance=1044115.25,
+        equity=1044115.25,
+    )
+    mock_client.connect_account.return_value = AccountConnectResponse(
+        status=ConnectionState.CONNECTED,
+        message="Attached to existing terminal session via Win32 IPC",
+        login=4000073238,
+        server="Darwinex-Live",
+        trade_mode="REAL",
+        balance=1044115.25,
+        currency="USD",
+        account_info=acc_info,
+    )
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        mock_mode=False,
+        latency_ms=10.0,
+        account_info=acc_info,
+    )
+    mock_client.get_account_info.return_value = acc_info
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {
+        "status": "RUNNING",
+        "strategy_name": "Darwin_Trend_ATR_V1",
+        "symbol": "EURUSD",
+        "daily_drawdown_pct": 0.0,
+    }
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(80, 40)) as pilot:
+        # Open connect modal via hotkey
+        await pilot.press("f2")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ConnectModal)
+        modal = app.screen
+
+        # Ensure password field is left completely empty
+        input_password = modal.query_one("#input-password", Input)
+        assert input_password.value == ""
+
+        # Press connect button
+        modal.query_one("#btn-submit", Button).press()
+        await pilot.pause()
+
+        # ConnectModal should dismiss cleanly on success
+        assert app.screen is not modal
+
+        # Verify connect_account was called with empty password and correct path
+        mock_client.connect_account.assert_awaited_once()
+        req = mock_client.connect_account.call_args[0][0]
+        assert req.login == 4000073238
+        assert req.password == ""
+        assert req.server == "Darwinex-Live"
+        assert req.mock_mode is False
+
+        # Live telemetry populates without password prompt
+        header = app.query_one(HeaderBar)
+        badge = header.query_one("#status-badge")
+        assert "[● CONNECTED (LIVE)]" in str(badge.content)
+
+
+@pytest.mark.asyncio
+async def test_terminal_error_diagnostic_mapping_scenario_4():
+    """
+    Scenario 4: Terminal Error Diagnostic Mapping
+    Given the user enters an invalid login ID or server in the Connect Modal
+    When the user clicks Connect
+    Then the backend maps the numeric MT5 error code from mt5.last_error() via MT5_ERROR_MESSAGES
+    And the TUI Connect Modal displays a human-readable diagnostic banner
+    And the modal remains open with inputs preserved for correction.
+    """
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    diagnostic_err = "MT5 Error 1: Invalid account credentials or authorization failed"
+    mock_client.connect_account.return_value = AccountConnectResponse(
+        status=ConnectionState.ERROR,
+        message=diagnostic_err,
+        login=9999999,
+        server="Darwinex-Live",
+        trade_mode="REAL",
+        balance=0.0,
+        currency="USD",
+        error=diagnostic_err,
+    )
+
+    modal = ConnectModal(api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(80, 40)) as pilot:
+        app.push_screen(modal)
+        await pilot.pause()
+
+        input_login = modal.query_one("#input-login", Input)
+        input_login.value = "9999999"
+
+        # Click submit
+        modal.query_one("#btn-submit", Button).press()
+        await pilot.pause()
+
+        # Modal must remain open with error banner visible
+        assert app.screen is modal
+        banner = modal.query_one("#error-banner", Static)
+        assert banner.has_class("visible")
+        assert "Invalid account credentials or authorization failed" in str(banner.content)
+        assert "MT5 Error 1" in str(banner.content)
+
+        # Input values are preserved for user correction
+        assert input_login.value == "9999999"
+
+
+@pytest.mark.asyncio
+async def test_darwinex_zero_risk_limits_and_buffer_warning_scenario_5():
+    """
+    Scenario 5: Darwinex Zero Risk Limits Visibility & Buffer Warning
+    Given the TUI is connected to live DarwinX Zero account 4000073238
+    When the account experiences floating drawdown
+    Then the StrategyPanel displays the daily drawdown percentage alongside the strict 3.0% Darwinex Zero threshold
+    And if drawdown reaches or exceeds the configured drawdown_warning_pct (2.5%), the drawdown indicator displays an amber "[⚠ WARNING]" badge
+    And if drawdown remains below 2.0%, it displays a green "[● SAFE]" badge.
+    """
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live", balance=100000.0, equity=100000.0),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "RUNNING"}
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test():
+        strat = app.query_one(StrategyPanel)
+        dd_widget = strat.query_one("#strategy-drawdown-value")
+
+        # Step 1: Drawdown < 2.0% (e.g. 1.25%) -> Green [● SAFE] badge
+        strat.update_telemetry(
+            strategy_data={
+                "status": "RUNNING",
+                "strategy_name": "Darwin_Trend_ATR_V1",
+                "symbol": "EURUSD",
+                "account_balance": 100000.0,
+                "account_equity": 98750.0,  # 1.25% drawdown
+            }
+        )
+        assert "1.25%" in str(dd_widget.content)
+        assert "3.00%" in str(dd_widget.content)
+        assert "[● SAFE]" in str(dd_widget.content)
+        assert "drawdown-safe" in dd_widget.classes
+        assert "drawdown-normal" in dd_widget.classes
+
+        # Step 2: Drawdown reaches or exceeds warning buffer 2.5% (e.g. 2.60%) -> Amber [⚠ WARNING] badge
+        strat.update_telemetry(
+            strategy_data={
+                "status": "RUNNING",
+                "strategy_name": "Darwin_Trend_ATR_V1",
+                "symbol": "EURUSD",
+                "account_balance": 100000.0,
+                "account_equity": 97400.0,  # 2.60% drawdown >= 2.50%
+            }
+        )
+        assert "2.60%" in str(dd_widget.content)
+        assert "3.00%" in str(dd_widget.content)
+        assert "[⚠ WARNING]" in str(dd_widget.content)
+        assert "drawdown-warning" in dd_widget.classes
+        assert "drawdown-safe" not in dd_widget.classes
+
+        # Step 3: Drawdown hard breach (>= 3.0%, e.g. 3.20%) -> Breach badge
+        strat.update_telemetry(
+            strategy_data={
+                "status": "RUNNING",
+                "strategy_name": "Darwin_Trend_ATR_V1",
+                "symbol": "EURUSD",
+                "account_balance": 100000.0,
+                "account_equity": 96800.0,  # 3.20% drawdown >= 3.00%
+            }
+        )
+        assert "3.20%" in str(dd_widget.content)
+        assert "3.00%" in str(dd_widget.content)
+        assert "[⛔ BREACH]" in str(dd_widget.content)
+        assert "drawdown-breach" in dd_widget.classes
+
+
+@pytest.mark.asyncio
+async def test_graceful_mock_fallback_non_windows_or_missing_dep_scenario_6():
+    """
+    Scenario 6: Graceful Mock Fallback on Non-Windows or Missing Dependency
+    Given the Darwin Trader backend or TUI is launched in an environment where MetaTrader5 is not installed or OS is not Windows
+    When the application starts
+    Then the connector automatically engages Simulation / Mock mode without raising unhandled import exceptions
+    And the TUI displays a cyan/amber "[● SIMULATION]" badge.
+    """
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    # Backend reports mock/simulation mode due to missing dependency or non-Windows OS
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Simulated",
+        mock_mode=True,
+        latency_ms=0.5,
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Simulated", balance=100000.0, equity=100000.0),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test():
+        header = app.query_one(HeaderBar)
+        badge = header.query_one("#status-badge")
+
+        # Badge reflects SIMULATION mode without unhandled errors
+        assert "[● SIMULATION]" in str(badge.content)
+        assert "status-simulation" in badge.classes
 
 
 
