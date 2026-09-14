@@ -116,6 +116,32 @@ class DarwinApiClient:
         except Exception:
             return None
 
+    async def start_strategy(self) -> Dict[str, Any]:
+        """
+        POST /api/v1/strategy/start
+        Starts the algorithmic trading strategy.
+        """
+        try:
+            client = await self.get_client()
+            resp = await client.post("/api/v1/strategy/start")
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            return {"message": "Failed to start strategy", "status": "ERROR", "detail": str(exc)}
+
+    async def pause_strategy(self) -> Dict[str, Any]:
+        """
+        POST /api/v1/strategy/pause
+        Pauses the algorithmic trading strategy without liquidating positions.
+        """
+        try:
+            client = await self.get_client()
+            resp = await client.post("/api/v1/strategy/pause")
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            return {"message": "Failed to pause strategy", "status": "ERROR", "detail": str(exc)}
+
     async def connect_account(self, request: AccountConnectRequest) -> AccountConnectResponse:
         """
         POST /api/v1/account/connect

@@ -8,10 +8,12 @@ Covers:
 import pytest
 import httpx
 from unittest.mock import AsyncMock
+from textual.widgets import Button
 
 
 from strategy_engine.models import (
     AccountConnectRequest,
+    AccountConnectResponse,
     AccountInfo,
     ConnectionState,
     ConnectionStatus,
@@ -21,9 +23,11 @@ from strategy_engine.models import (
 from tui.api_client import DarwinApiClient
 from tui.app import DarwinTraderApp
 from tui.screens.connect_modal import ConnectModal
+from tui.screens.confirm_modal import ConfirmModal
 from tui.widgets.header_bar import HeaderBar
 from tui.widgets.summary_cards import SummaryCards, MetricCard
 from tui.widgets.positions_table import PositionsTable
+from tui.widgets.strategy_panel import StrategyPanel
 
 
 @pytest.mark.asyncio
@@ -250,6 +254,14 @@ async def test_app_background_polling_with_mock_client():
         latency_ms=18.4,
         account_info=AccountInfo(login=1234567, server="Darwinex-Live"),
     )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {
+        "status": "IDLE",
+        "strategy_name": "Darwin_Trend_ATR_V1",
+        "symbol": "EURUSD",
+        "account_balance": 100000.0,
+        "account_equity": 100000.0,
+    }
 
     app = DarwinTraderApp(api_client=mock_client)
     async with app.run_test() as pilot:
@@ -424,3 +436,319 @@ async def test_responsive_layout_collapse_below_80_columns():
         await pilot.resize_terminal(100, 30)
         await pilot.pause()
         assert "compact-grid" not in summary.classes
+
+
+@pytest.mark.asyncio
+async def test_strategy_panel_rendering_and_telemetry():
+    """Verify StrategyPanel renders state, drawdown, and exposure accurately."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Demo",
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test():
+        strat = app.query_one(StrategyPanel)
+        state_widget = strat.query_one("#strategy-state-value")
+        name_widget = strat.query_one("#strategy-name-value")
+        drawdown_widget = strat.query_one("#strategy-drawdown-value")
+        exposure_widget = strat.query_one("#strategy-exposure-value")
+
+        # Initial state
+        assert "[● IDLE]" in str(state_widget.content)
+        assert "0.00 lots" in str(exposure_widget.content)
+
+        # Update running with positions
+        pos1 = Position(
+            ticket=101,
+            symbol="EURUSD",
+            order_type=OrderType.BUY,
+            volume=1.5,
+            open_price=1.08,
+            current_price=1.085,
+        )
+        pos2 = Position(
+            ticket=102,
+            symbol="EURUSD",
+            order_type=OrderType.SELL,
+            volume=0.5,
+            open_price=1.08,
+            current_price=1.085,
+        )
+
+        strat_data = {
+            "status": "RUNNING",
+            "strategy_name": "Darwin_Trend_ATR_V1",
+            "symbol": "EURUSD",
+            "account_balance": 100000.0,
+            "account_equity": 98000.0, # 2% drawdown
+        }
+        strat.update_telemetry(strategy_data=strat_data, positions=[pos1, pos2])
+
+        assert "[● RUNNING]" in str(state_widget.content)
+        assert "state-running" in state_widget.classes
+        assert "2.00%" in str(drawdown_widget.content)
+        assert "drawdown-normal" in drawdown_widget.classes
+        assert "2.00 lots" in str(exposure_widget.content)
+
+        # Drawdown breach (>= 3.0%)
+        strat_data_breach = {
+            "status": "PAUSED",
+            "strategy_name": "Darwin_Trend_ATR_V1",
+            "symbol": "EURUSD",
+            "account_balance": 100000.0,
+            "account_equity": 96500.0, # 3.5% drawdown
+        }
+        strat.update_telemetry(strategy_data=strat_data_breach, positions=[pos1])
+        assert "[⏸ PAUSED]" in str(state_widget.content)
+        assert "state-paused" in state_widget.classes
+        assert "3.50%" in str(drawdown_widget.content)
+        assert "drawdown-warning" in drawdown_widget.classes
+        assert "1.50 lots" in str(exposure_widget.content)
+
+        # Offline state
+        strat.update_telemetry(is_offline=True)
+        title = strat.query_one("#strategy-panel-title")
+        assert "OFFLINE" in str(title.content)
+        assert "[○ UNKNOWN]" in str(state_widget.content)
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_with_open_positions_scenario_4():
+    """Verify Scenario 4: Safeguarded Emergency Kill Switch with Open Positions (Hotkey K)."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=55555, server="Darwinex-Live", balance=10000.0, equity=10000.0),
+    )
+    mock_positions = [
+        Position(
+            ticket=501,
+            symbol="EURUSD",
+            order_type=OrderType.BUY,
+            volume=1.0,
+            open_price=1.08,
+            current_price=1.082,
+        ),
+        Position(
+            ticket=502,
+            symbol="GBPUSD",
+            order_type=OrderType.SELL,
+            volume=0.5,
+            open_price=1.28,
+            current_price=1.278,
+        ),
+    ]
+    mock_client.get_positions.return_value = mock_positions
+    mock_client.get_strategy_status.return_value = {
+        "status": "RUNNING",
+        "strategy_name": "Darwin_Trend_ATR_V1",
+        "symbol": "EURUSD",
+    }
+    mock_client.kill_switch.return_value = {
+        "message": "Emergency Kill Switch Activated",
+        "positions_closed": 2,
+        "detail": "Closed 2 positions",
+        "status": "PAUSED",
+    }
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        # Press hotkey K
+        await pilot.press("k")
+        await pilot.pause()
+
+        # Danger dialog must be displayed
+        assert isinstance(app.screen, ConfirmModal)
+        assert app.screen.is_danger is True
+        prompt = app.screen.query_one("#confirm-prompt")
+        assert "Are you sure you want to close ALL positions and pause strategy?" in str(prompt.content)
+
+        # After confirming, simulate backend positions returning empty and status PAUSED
+        mock_client.get_positions.return_value = []
+        mock_client.get_strategy_status.return_value = {
+            "status": "PAUSED",
+            "strategy_name": "Darwin_Trend_ATR_V1",
+            "symbol": "EURUSD",
+        }
+
+        # Click Yes (Confirm)
+        await pilot.click("#btn-confirm")
+        await pilot.pause(0.1)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        # Verify kill_switch API was called
+        mock_client.kill_switch.assert_awaited_once()
+
+        # Verify positions table is empty and strategy is paused
+        table = app.query_one(PositionsTable)
+        assert table.query_one("#positions-data-table").row_count == 0
+        strat_panel = app.query_one(StrategyPanel)
+        state_badge = strat_panel.query_one("#strategy-state-value")
+        assert "[⏸ PAUSED]" in str(state_badge.content)
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_with_zero_positions_scenario_8():
+    """Verify Scenario 8: Kill-Switch Invocation with Zero Open Positions (Hotkey K)."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=55555, server="Darwinex-Live", balance=10000.0, equity=10000.0),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {
+        "status": "RUNNING",
+        "strategy_name": "Darwin_Trend_ATR_V1",
+        "symbol": "EURUSD",
+    }
+    mock_client.pause_strategy.return_value = {
+        "message": "Strategy paused",
+        "status": "PAUSED",
+    }
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        # Press hotkey K
+        await pilot.press("k")
+        await pilot.pause()
+
+        # Informational prompt must be displayed (not danger)
+        assert isinstance(app.screen, ConfirmModal)
+        assert app.screen.is_danger is False
+        prompt = app.screen.query_one("#confirm-prompt")
+        assert "No active positions to liquidate; strategy paused" in str(prompt.content)
+
+        mock_client.get_strategy_status.return_value = {
+            "status": "PAUSED",
+            "strategy_name": "Darwin_Trend_ATR_V1",
+            "symbol": "EURUSD",
+        }
+
+        # Confirm
+        await pilot.click("#btn-confirm")
+        await pilot.pause(0.1)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        # Verify pause_strategy was called, and kill_switch was NOT called
+        mock_client.pause_strategy.assert_awaited_once()
+        mock_client.kill_switch.assert_not_awaited()
+
+        strat_panel = app.query_one(StrategyPanel)
+        state_badge = strat_panel.query_one("#strategy-state-value")
+        assert "[⏸ PAUSED]" in str(state_badge.content)
+
+
+@pytest.mark.asyncio
+async def test_connect_modal_success_and_account_switching_scenario_3():
+    """Verify Scenario 3: Account Switching via Connection Modal (F2/C)."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Demo",
+        account_info=AccountInfo(login=111111, server="Darwinex-Demo"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {
+        "status": "CONNECTED",
+        "strategy_name": "Darwin_Trend_ATR_V1",
+        "symbol": "EURUSD",
+    }
+    mock_client.connect_account.return_value = AccountConnectResponse(
+        status=ConnectionState.CONNECTED,
+        message="Connected to live account",
+        login=999888,
+        server="Darwinex-Live",
+        trade_mode="REAL",
+        balance=75000.0,
+        account_info=AccountInfo(login=999888, server="Darwinex-Live", balance=75000.0, equity=76000.0),
+    )
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(80, 40)) as pilot:
+        await pilot.pause()
+
+        # Press F2 to open ConnectModal
+        await pilot.press("f2")
+        await pilot.pause()
+        assert isinstance(app.screen, ConnectModal)
+
+        # Fill in credentials
+        login_input = app.screen.query_one("#input-login")
+        login_input.value = "999888"
+        password_input = app.screen.query_one("#input-password")
+        password_input.value = "secret_pass"
+
+        # Update client return for next poll
+        mock_client.get_account_status.return_value = ConnectionStatus(
+            status=ConnectionState.CONNECTED,
+            server="Darwinex-Live",
+            mock_mode=False,
+            account_info=AccountInfo(login=999888, server="Darwinex-Live", balance=75000.0, equity=76000.0),
+        )
+
+        # Click Connect button
+        modal = app.screen
+        modal.query_one("#btn-submit", Button).press()
+        await pilot.pause(0.1)
+
+        # Modal must be dismissed on success
+        assert not isinstance(app.screen, ConnectModal)
+
+        # Verify telemetry updated to new account
+        header = app.query_one(HeaderBar)
+        info_widget = header.query_one("#telemetry-info")
+        assert "Login: 999888" in str(info_widget.content)
+        assert "Server: Darwinex-Live" in str(info_widget.content)
+
+
+@pytest.mark.asyncio
+async def test_connect_modal_error_banner_scenario_6():
+    """Verify Scenario 6: Invalid Credentials Handling in Connect Modal displays error banner."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.connect_account.return_value = AccountConnectResponse(
+        status=ConnectionState.ERROR,
+        message="MT5 initialize failed: Invalid account login or password",
+        error="Invalid account login or password",
+        login=123,
+        server="Darwinex-Live",
+    )
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+
+    modal = ConnectModal(api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(80, 40)) as pilot:
+        app.push_screen(modal)
+        await pilot.pause()
+
+        modal.query_one("#input-login").value = "123"
+        modal.query_one("#input-password").value = "wrong_password"
+
+        # Submit
+        modal.query_one("#btn-submit", Button).press()
+        await pilot.pause()
+
+        # Modal remains open
+        assert app.screen is modal
+        banner = modal.query_one("#error-banner")
+        assert "visible" in banner.classes
+        assert "Invalid account login or password" in str(banner.content)
+        # Input fields preserved
+        assert modal.query_one("#input-login").value == "123"
+
