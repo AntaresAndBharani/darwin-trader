@@ -16,6 +16,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Added unit test `test_connection_state_validation` in `strategy_engine/tests/test_strategy.py` verifying serialization and asserting `ValidationError` is raised for invalid status strings.
 
 ### Added
+- **Strategy Control Panel & Action Confirmation Modals (Issue #54)**:
+  - Implemented `StrategyPanel` widget (`tui/widgets/strategy_panel.py`) displaying strategy execution state badges (`[● RUNNING]`, `[⏸ PAUSED]`, `[■ STOPPED]`, `[● IDLE]`), strategy and symbol identifier, daily drawdown percentage with warning highlight (>= 3.0%), and total exposure lots calculated across open positions.
+  - Implemented `ConfirmModal` screen (`tui/screens/confirm_modal.py`) with support for high-contrast emergency danger styling and informational prompts.
+  - Integrated safeguarded Emergency Kill Switch hotkey `K` in `DarwinTraderApp`:
+    - When open positions > 0: displays red confirmation modal requiring user approval to invoke `POST /api/v1/strategy/kill-switch`, close open positions, pause strategy, and clear positions table.
+    - When 0 open positions: displays informational prompt ("No active positions to liquidate; strategy paused") and pauses strategy via `POST /api/v1/strategy/pause` without triggering order liquidation requests.
+  - Implemented `ConnectModal` screen (`tui/screens/connect_modal.py`) supporting Login, Password, Server dropdown, Path, Mock Mode toggle, animated connection spinner, and inline error banner (`#error-banner`) preserving form inputs upon failure.
+  - Added `start_strategy` and `pause_strategy` methods to `DarwinApiClient` (`tui/api_client.py`).
+  - Added comprehensive automated test coverage in `tui/tests/test_tui.py` covering state badge transitions, drawdown warning triggers, hotkey `K` liquidation & pause branches, and connect modal error handling.
+
 - **Summary Cards & Positions Table Widgets (Issue #53)**:
   - Implemented `SummaryCards` widget (`tui/widgets/summary_cards.py`) displaying financial metrics overview: Balance, Equity, Margin, and Floating P&L with dual-glyph `▲/▼` indicators and USD currency formatting.
   - Implemented `PositionsTable` widget (`tui/widgets/positions_table.py`) wrapping `DataTable` with keyed row differential reconciliation and `DataTable.update_cell` in-place mutations (preserving row selection identity without table remounting).

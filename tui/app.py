@@ -12,9 +12,11 @@ from textual.widgets import Footer
 
 from .api_client import DarwinApiClient
 from .screens.connect_modal import ConnectModal
+from .screens.confirm_modal import ConfirmModal
 from .widgets.header_bar import HeaderBar
 from .widgets.summary_cards import SummaryCards
 from .widgets.positions_table import PositionsTable
+from .widgets.strategy_panel import StrategyPanel
 
 
 class DarwinTraderApp(App[None]):
@@ -40,6 +42,7 @@ class DarwinTraderApp(App[None]):
     BINDINGS = [
         Binding("f2", "open_connect_modal", "Connect", show=True),
         Binding("c", "open_connect_modal", "Connect", show=True),
+        Binding("k", "kill_switch", "Kill Switch", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -61,6 +64,7 @@ class DarwinTraderApp(App[None]):
             with Container(id="main-container"):
                 yield SummaryCards(id="summary-cards")
                 yield PositionsTable(id="positions-table")
+                yield StrategyPanel(id="strategy-panel")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -115,12 +119,80 @@ class DarwinTraderApp(App[None]):
             is_offline = (status.status != "CONNECTED")
             positions = await self.api_client.get_positions()
             positions_tbl.update_positions(positions, is_offline=is_offline)
+
+            # Strategy telemetry polling
+            try:
+                strat_panel = self.query_one(StrategyPanel)
+                strat_status = await self.api_client.get_strategy_status()
+                strat_panel.update_telemetry(
+                    strategy_data=strat_status,
+                    positions=positions,
+                    is_offline=is_offline,
+                )
+            except Exception:
+                pass
         except Exception:
             pass
 
     def action_open_connect_modal(self) -> None:
         """Action invoked by F2 or C keybinding or button to open connect modal."""
-        self.push_screen(ConnectModal())
+        async def _on_connected_callback(req):
+            await self.poll_telemetry()
+
+        self.push_screen(ConnectModal(api_client=self.api_client, on_success=_on_connected_callback))
+
+    async def action_kill_switch(self) -> None:
+        """
+        Safeguarded Emergency Kill Switch (K hotkey).
+        Checks active open positions:
+        - If > 0 open positions: Prompts high-contrast red warning dialog.
+          Upon confirmation, calls POST /api/v1/strategy/kill-switch, closes tickets, pauses strategy, and clears positions table.
+        - If 0 open positions: Shows informational prompt "No active positions to liquidate; strategy paused".
+          Upon confirmation, pauses strategy without sending unnecessary order liquidation requests.
+        """
+        positions = await self.api_client.get_positions()
+        has_positions = len(positions) > 0
+
+        if has_positions:
+            prompt_text = "Are you sure you want to close ALL positions and pause strategy? [Yes / No]"
+            modal = ConfirmModal(
+                title="EMERGENCY KILL SWITCH",
+                prompt=prompt_text,
+                is_danger=True,
+                confirm_label="Yes",
+                cancel_label="No",
+            )
+        else:
+            prompt_text = "No active positions to liquidate; strategy paused"
+            modal = ConfirmModal(
+                title="STRATEGY PAUSE",
+                prompt=prompt_text,
+                is_danger=False,
+                confirm_label="OK",
+                cancel_label="Cancel",
+            )
+
+        def _on_confirm(confirmed: Optional[bool]) -> None:
+            if confirmed:
+                self.run_worker(self._execute_kill_switch(has_positions=has_positions))
+
+        self.push_screen(modal, _on_confirm)
+
+    async def _execute_kill_switch(self, has_positions: bool) -> None:
+        """Executes backend call following confirmation."""
+        try:
+            if has_positions:
+                res = await self.api_client.kill_switch()
+                closed_count = res.get("positions_closed", 0)
+                self.notify(f"Kill Switch Activated: {closed_count} positions closed", severity="warning")
+            else:
+                await self.api_client.pause_strategy()
+                self.notify("Strategy paused. No positions to liquidate.", severity="information")
+
+            # Immediately synchronize UI
+            await self.poll_telemetry()
+        except Exception as exc:
+            self.notify(f"Kill switch failed: {exc}", severity="error")
 
     async def on_button_pressed(self, event) -> None:
         """Handles button clicks, such as the Connect button in HeaderBar."""

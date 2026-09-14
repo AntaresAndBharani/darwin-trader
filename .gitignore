@@ -46,3 +46,4 @@ local_test/
 dist/
 unit-test-summary.md
 logs/local-pipeline/
+.graph/
