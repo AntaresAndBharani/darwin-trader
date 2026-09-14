@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **TUI Connect Modal Auto-Detection & Account Pinning (Issue #62)**:
+  - Pre-populated default terminal path in `ConnectModal` to `C:\Program Files\Darwinex MetaTrader 5\terminal64.exe`.
+  - Pre-filled default login to `4000073238` and default server to `Darwinex-Live`.
+  - Added auto-detection for MetaTrader 5 terminal executable binary: unchecks `Mock Mode` by default when the terminal binary exists on the host workstation, and defaults to checked when missing.
+  - Added unit and Textual pilot tests in `tui/tests/test_tui.py` validating pre-population, auto-detection toggle behavior, and submission with pinned defaults.
+
 - **MetaTrader5 Dependency & Live IPC Connector Hardening (Issue #61)**:
   - Installed `MetaTrader5` on Windows environment and verified live terminal connectivity.
   - Implemented `MT5_ERROR_MESSAGES` dictionary and `format_mt5_error()` in `strategy_engine/mt5_connector.py` for comprehensive human-readable error diagnostics across IPC, authentication, and timeout failure modes.
