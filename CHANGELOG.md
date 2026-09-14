@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **DarwinX Zero Drawdown Monitoring & Comprehensive Test Suite (Issue #63)**:
+  - Rendered DarwinX Zero 3.0% maximum daily drawdown limit alongside active floating drawdown percentage in `StrategyPanel` (`tui/widgets/strategy_panel.py`).
+  - Implemented real-time status badging in `StrategyPanel`: green `[● SAFE]` badge for drawdown below 2.0%, amber `[⚠ WARNING]` badge for drawdown reaching or exceeding the 2.5% buffer threshold (`drawdown_warning_pct`), and `[⛔ BREACH]` badge for drawdown reaching or exceeding the 3.0% hard limit.
+  - Implemented unit and Textual pilot tests in `tui/tests/test_tui.py` providing complete BDD acceptance test coverage across all 6 Gherkin scenarios defined in parent Issue #60:
+    - Scenario 1: Automatic Detection of Darwinex MT5 Installation (`test_connect_modal_autodetection_and_account_pinning_terminal_exists`).
+    - Scenario 2: Live MT5 IPC Connection for Account 4000073238 on Darwinex-Live (`test_live_mt5_ipc_connection_account_4000073238_scenario_2`).
+    - Scenario 3: Attach to Already-Running MT5 Terminal Instance Without Password (`test_mt5_attach_to_running_terminal_without_password_scenario_3`).
+    - Scenario 4: Terminal Error Diagnostic Mapping (`test_terminal_error_diagnostic_mapping_scenario_4`).
+    - Scenario 5: Darwinex Zero Risk Limits Visibility & Buffer Warning (`test_darwinex_zero_risk_limits_and_buffer_warning_scenario_5`).
+    - Scenario 6: Graceful Mock Fallback on Non-Windows or Missing Dependency (`test_graceful_mock_fallback_non_windows_or_missing_dep_scenario_6`).
+
 - **TUI Connect Modal Auto-Detection & Account Pinning (Issue #62)**:
   - Pre-populated default terminal path in `ConnectModal` to `C:\Program Files\Darwinex MetaTrader 5\terminal64.exe`.
   - Pre-filled default login to `4000073238` and default server to `Darwinex-Live`.
