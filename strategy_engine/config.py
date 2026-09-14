@@ -27,6 +27,7 @@ class StrategyConfig(BaseModel):
     # Position & Risk Management (Darwinex Zero Focused)
     risk_per_trade_pct: float = 1.0     # 1% per trade
     max_daily_drawdown_pct: float = 3.0 # Hard cap daily drawdown at 3%
+    drawdown_warning_pct: float = 2.5   # Warning buffer threshold at 2.5%
     max_open_positions: int = 2
     max_spread_pips: float = 2.5
     

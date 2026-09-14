@@ -107,6 +107,10 @@ def test_account_connect_and_status_failure(monkeypatch):
         def last_error():
             return (-10005, "Invalid account login or password")
 
+        @staticmethod
+        def shutdown():
+            pass
+
     monkeypatch.setattr(mc, "mt5", FakeMT5)
 
     resp_connect = client.post(
@@ -133,6 +137,16 @@ def test_account_connect_and_status_failure(monkeypatch):
     assert status_data["mock_mode"] is False
     assert status_data["last_error"] == data["error"]
     assert status_data["account_info"] is None
+
+    # When disconnected, last_error is cleared and status transitions back to DISCONNECTED (Issue #10)
+    from api_gateway.routes_strategy import connector
+    connector.disconnect()
+    resp_status_after = client.get("/api/v1/account/status")
+    assert resp_status_after.status_code == 200
+    status_after_data = resp_status_after.json()
+    assert status_after_data["status"] == "DISCONNECTED"
+    assert status_after_data["last_error"] is None
+    assert status_after_data["account_info"] is None
 
 
 def test_account_connect_path_fallback_preserves_config(preserve_mt5_path):
