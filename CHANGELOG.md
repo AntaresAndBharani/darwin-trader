@@ -16,6 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Added unit test `test_connection_state_validation` in `strategy_engine/tests/test_strategy.py` verifying serialization and asserting `ValidationError` is raised for invalid status strings.
 
 ### Added
+- **TUI API Client & Base Application Shell (Issue #52)**:
+  - Added `tui` module featuring asynchronous HTTP client `DarwinApiClient` built on `httpx.AsyncClient` with connection pooling and resilient offline fallbacks.
+  - Implemented `DarwinTraderApp` shell layout with top `HeaderBar` displaying live connection telemetry badges (`[● CONNECTED (LIVE)]`, `[● CONNECTED (DEMO)]`, `[● SIMULATION]`, `[○ GATEWAY UNREACHABLE (Xs)]`), broker server, account login ID, and reconnect countdown timer.
+  - Added dual keybindings `F2` and `C` (and Connect button trigger) invoking `ConnectModal` account connection dialog.
+  - Added CLI execution entrypoint `python -m tui` (`tui/__main__.py`).
+  - Added automated unit and integration tests (`tui/tests/test_tui.py`) covering offline fallback behavior, badge formatting, background telemetry polling, and keybinding interactions.
+  - Added `textual>=0.70.0` dependency to `api_gateway/requirements.txt`, updated `pytest.ini` and CI `build.yml`.
 - **Explicit MT5 Path Teardown Fixture for Connect Tests**:
   - Added `preserve_mt5_path` fixture in `api_gateway/tests/conftest.py` that snapshots `global_config.mt5_path` and restores it in a teardown `finally` block.
   - Updated `test_account_connect_path_fallback_preserves_config` and `test_account_connect_explicit_path_overrides_config` in `api_gateway/tests/test_api.py` to use `preserve_mt5_path` explicitly.
