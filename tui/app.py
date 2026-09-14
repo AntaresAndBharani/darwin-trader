@@ -1,16 +1,20 @@
 """
 Main Application Shell for Darwin Trader Terminal User Interface (TUI).
-Provides base layout, header bar, and dual keybindings (F2 and C) to invoke connection modal.
+Provides base layout, header bar, summary cards, positions table,
+and dual keybindings (F2 and C) to invoke connection modal.
 """
 from typing import Optional
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, VerticalScroll
-from textual.widgets import Footer, Static
+from textual.events import Resize
+from textual.widgets import Footer
 
 from .api_client import DarwinApiClient
 from .screens.connect_modal import ConnectModal
 from .widgets.header_bar import HeaderBar
+from .widgets.summary_cards import SummaryCards
+from .widgets.positions_table import PositionsTable
 
 
 class DarwinTraderApp(App[None]):
@@ -22,16 +26,14 @@ class DarwinTraderApp(App[None]):
         color: $text;
     }
 
-    #main-container {
+    #main-viewport {
         height: 1fr;
-        padding: 1;
     }
 
-    #placeholder-content {
-        padding: 1;
-        border: round $primary;
+    #main-container {
         height: auto;
-        color: $text-muted;
+        min-height: 100%;
+        padding: 1;
     }
     """
 
@@ -57,17 +59,25 @@ class DarwinTraderApp(App[None]):
         yield HeaderBar(id="header-bar")
         with VerticalScroll(id="main-viewport"):
             with Container(id="main-container"):
-                yield Static(
-                    "Darwin Trader Dashboard Shell initialized.\n"
-                    "Press F2 or C to connect account, or Q to quit.",
-                    id="placeholder-content",
-                )
+                yield SummaryCards(id="summary-cards")
+                yield PositionsTable(id="positions-table")
         yield Footer()
 
     async def on_mount(self) -> None:
         """Called when app is mounted; initiates background telemetry polling."""
         await self.poll_telemetry()
         self._reconnect_timer = self.set_interval(1.0, self._tick_timer)
+
+    def on_resize(self, event: Resize) -> None:
+        """Responsive behavior: collapse SummaryCards into 2x2 grid below 80 cols or 24 rows."""
+        try:
+            summary = self.query_one(SummaryCards)
+            if event.size.width < 80 or event.size.height < 24:
+                summary.set_compact_layout(True)
+            else:
+                summary.set_compact_layout(False)
+        except Exception:
+            pass
 
     async def _tick_timer(self) -> None:
         """Timer callback running every second to update countdown or trigger poll."""
@@ -85,11 +95,26 @@ class DarwinTraderApp(App[None]):
                 pass
 
     async def poll_telemetry(self) -> None:
-        """Polls backend status and updates header bar without unhandled exceptions."""
+        """Polls backend status and updates widgets without unhandled exceptions."""
         try:
             status = await self.api_client.get_account_status()
             header = self.query_one(HeaderBar)
             header.update_telemetry(status, reconnect_seconds=self._countdown)
+
+            summary = self.query_one(SummaryCards)
+            positions_tbl = self.query_one(PositionsTable)
+
+            if status.account_info:
+                summary.update_metrics(account_info=status.account_info)
+            else:
+                info = await self.api_client.get_account_info()
+                if info:
+                    summary.update_metrics(account_info=info)
+
+            # Positions polling
+            is_offline = (status.status != "CONNECTED")
+            positions = await self.api_client.get_positions()
+            positions_tbl.update_positions(positions, is_offline=is_offline)
         except Exception:
             pass
 

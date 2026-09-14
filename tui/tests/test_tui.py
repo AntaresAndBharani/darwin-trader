@@ -15,11 +15,15 @@ from strategy_engine.models import (
     AccountInfo,
     ConnectionState,
     ConnectionStatus,
+    OrderType,
+    Position,
 )
 from tui.api_client import DarwinApiClient
 from tui.app import DarwinTraderApp
 from tui.screens.connect_modal import ConnectModal
 from tui.widgets.header_bar import HeaderBar
+from tui.widgets.summary_cards import SummaryCards, MetricCard
+from tui.widgets.positions_table import PositionsTable
 
 
 @pytest.mark.asyncio
@@ -256,3 +260,167 @@ async def test_app_background_polling_with_mock_client():
         assert "[● CONNECTED (LIVE)]" in str(badge.content)
         assert "Server: Darwinex-Live" in str(info.content)
         assert "Login: 1234567" in str(info.content)
+
+
+@pytest.mark.asyncio
+async def test_summary_cards_dual_glyph_and_formatting():
+    """Verify Scenario 1: SummaryCards dual glyphs (▲/▼) and USD currency formatting."""
+    app = DarwinTraderApp()
+    async with app.run_test():
+        summary = app.query_one(SummaryCards)
+
+        # 1. Test positive profit
+        info_pos = AccountInfo(
+            login=1001,
+            balance=104000.0,
+            equity=106500.0,
+            margin=1500.0,
+            profit=2500.0,
+        )
+        summary.update_metrics(account_info=info_pos)
+
+        card_bal = summary.query_one("#card-balance-value")
+        card_eq = summary.query_one("#card-equity-value")
+        card_mar = summary.query_one("#card-margin-value")
+        card_pnl = summary.query_one("#card-pnl-value")
+        pnl_card = summary.query_one("#card-pnl", MetricCard)
+
+        assert str(card_bal.content) == "$104,000.00"
+        assert str(card_eq.content) == "$106,500.00"
+        assert str(card_mar.content) == "$1,500.00"
+        assert "▲ +$2,500.00" in str(card_pnl.content)
+        assert "profit-positive" in pnl_card.classes
+
+        # 2. Test negative profit
+        info_neg = AccountInfo(
+            login=1001,
+            balance=100000.0,
+            equity=98500.0,
+            margin=2000.0,
+            profit=-1500.0,
+        )
+        summary.update_metrics(account_info=info_neg)
+        assert "▼ -$1,500.00" in str(card_pnl.content)
+        assert "profit-negative" in pnl_card.classes
+
+        # 3. Test zero profit
+        summary.update_metrics(floating_pnl=0.0)
+        assert "$0.00" in str(card_pnl.content)
+        assert "profit-neutral" in pnl_card.classes
+
+
+@pytest.mark.asyncio
+async def test_positions_table_rendering_and_in_place_updates():
+    """Verify Scenario 2: PositionsTable renders tickets and performs in-place cell updates."""
+    app = DarwinTraderApp()
+    async with app.run_test():
+        table_container = app.query_one(PositionsTable)
+        data_table = table_container.query_one("#positions-data-table")
+
+        pos1 = Position(
+            ticket=1001,
+            symbol="EURUSD",
+            order_type=OrderType.BUY,
+            volume=1.00,
+            open_price=1.08500,
+            current_price=1.08600,
+            sl=1.08000,
+            tp=1.09500,
+            pnl=100.0,
+            swap=2.50,
+        )
+        pos2 = Position(
+            ticket=1002,
+            symbol="GBPUSD",
+            order_type=OrderType.SELL,
+            volume=0.50,
+            open_price=1.27500,
+            current_price=1.27600,
+            sl=1.28000,
+            tp=1.26500,
+            pnl=-50.0,
+            swap=-1.20,
+        )
+
+        table_container.update_positions([pos1, pos2])
+        assert data_table.row_count == 2
+        assert 1001 in table_container._row_keys
+        assert 1002 in table_container._row_keys
+
+        # Check values
+        cell_curr = data_table.get_cell("1001", "current_price")
+        assert cell_curr == "1.08600"
+        cell_pnl = data_table.get_cell("1001", "pnl")
+        assert "▲ +$100.00" in str(cell_pnl)
+
+        cell_pnl2 = data_table.get_cell("1002", "pnl")
+        assert "▼ -$50.00" in str(cell_pnl2)
+
+        # Update in-place: ticket 1001 ticks from 1.08600 -> 1.08650, PnL 100 -> 150
+        pos1_ticked = Position(
+            ticket=1001,
+            symbol="EURUSD",
+            order_type=OrderType.BUY,
+            volume=1.00,
+            open_price=1.08500,
+            current_price=1.08650,
+            sl=1.08000,
+            tp=1.09500,
+            pnl=150.0,
+            swap=2.50,
+        )
+        table_container.update_positions([pos1_ticked, pos2])
+        assert data_table.row_count == 2
+        assert data_table.get_cell("1001", "current_price") == "1.08650"
+        assert "▲ +$150.00" in str(data_table.get_cell("1001", "pnl"))
+
+        # Close ticket 1002
+        table_container.update_positions([pos1_ticked])
+        assert data_table.row_count == 1
+        assert 1002 not in table_container._row_keys
+        assert 1001 in table_container._row_keys
+
+
+@pytest.mark.asyncio
+async def test_positions_table_offline_cache_preservation():
+    """Verify PositionsTable preserves rows when backend is offline and marks as STALE."""
+    app = DarwinTraderApp()
+    async with app.run_test():
+        table_container = app.query_one(PositionsTable)
+        data_table = table_container.query_one("#positions-data-table")
+
+        pos = Position(
+            ticket=2001,
+            symbol="USDJPY",
+            order_type=OrderType.BUY,
+            volume=0.20,
+            open_price=155.0,
+            current_price=155.2,
+            pnl=40.0,
+        )
+        table_container.update_positions([pos])
+        assert data_table.row_count == 1
+
+        # Now trigger offline update
+        table_container.update_positions([], is_offline=True)
+        assert data_table.row_count == 1
+        title = table_container.query_one("#positions-table-title")
+        assert "STALE / OFFLINE CACHE" in str(title.content)
+
+
+@pytest.mark.asyncio
+async def test_responsive_layout_collapse_below_80_columns():
+    """Verify Scenario 7: Terminal resize below 80 columns or 24 rows triggers compact-grid layout."""
+    app = DarwinTraderApp()
+    async with app.run_test() as pilot:
+        summary = app.query_one(SummaryCards)
+
+        # Set size below 80 cols (e.g. 75x30)
+        await pilot.resize_terminal(75, 30)
+        await pilot.pause()
+        assert "compact-grid" in summary.classes
+
+        # Set size >= 80 cols (e.g. 100x30)
+        await pilot.resize_terminal(100, 30)
+        await pilot.pause()
+        assert "compact-grid" not in summary.classes
