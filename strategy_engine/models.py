@@ -51,6 +51,7 @@ class Position(BaseModel):
     sl: float = 0.0
     tp: float = 0.0
     pnl: float = 0.0
+    swap: float = 0.0
     open_time: datetime = Field(default_factory=datetime.utcnow)
     magic: int = 0
 

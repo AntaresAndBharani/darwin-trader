@@ -16,6 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Added unit test `test_connection_state_validation` in `strategy_engine/tests/test_strategy.py` verifying serialization and asserting `ValidationError` is raised for invalid status strings.
 
 ### Added
+- **Summary Cards & Positions Table Widgets (Issue #53)**:
+  - Implemented `SummaryCards` widget (`tui/widgets/summary_cards.py`) displaying financial metrics overview: Balance, Equity, Margin, and Floating P&L with dual-glyph `▲/▼` indicators and USD currency formatting.
+  - Implemented `PositionsTable` widget (`tui/widgets/positions_table.py`) wrapping `DataTable` with keyed row differential reconciliation and `DataTable.update_cell` in-place mutations (preserving row selection identity without table remounting).
+  - Added stale cache retention for open positions when gateway is unreachable or offline (`ACTIVE POSITIONS [STALE / OFFLINE CACHE]`).
+  - Added responsive viewport collapse in `DarwinTraderApp`: automatically transforms `SummaryCards` from a horizontal row into a compact 2x2 grid below 80 columns or 24 rows.
+  - Added `swap` field to `Position` model in `strategy_engine/models.py`.
+  - Added comprehensive automated test coverage in `tui/tests/test_tui.py` covering dual-glyph formatting, in-place cell updates, offline cache preservation, and terminal resize responsiveness.
 - **TUI API Client & Base Application Shell (Issue #52)**:
   - Added `tui` module featuring asynchronous HTTP client `DarwinApiClient` built on `httpx.AsyncClient` with connection pooling and resilient offline fallbacks.
   - Implemented `DarwinTraderApp` shell layout with top `HeaderBar` displaying live connection telemetry badges (`[● CONNECTED (LIVE)]`, `[● CONNECTED (DEMO)]`, `[● SIMULATION]`, `[○ GATEWAY UNREACHABLE (Xs)]`), broker server, account login ID, and reconnect countdown timer.
