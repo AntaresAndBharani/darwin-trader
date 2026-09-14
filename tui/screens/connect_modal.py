@@ -4,6 +4,7 @@ Supports fields for Login, Password, Server dropdown, Path, and Mock Mode.
 Displays connecting spinner and inline error banners when connection fails.
 """
 import inspect
+import os
 from typing import Any, Callable, Optional
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
@@ -19,6 +20,11 @@ SERVER_CHOICES = [
     ("Darwinex-Live", "Darwinex-Live"),
     ("MetaQuotes-Demo", "MetaQuotes-Demo"),
 ]
+
+
+DEFAULT_TERMINAL_PATH = r"C:\Program Files\Darwinex MetaTrader 5\terminal64.exe"
+DEFAULT_LOGIN = 4000073238
+DEFAULT_SERVER = "Darwinex-Live"
 
 
 class ConnectModal(ModalScreen[Optional[AccountConnectRequest]]):
@@ -110,6 +116,9 @@ class ConnectModal(ModalScreen[Optional[AccountConnectRequest]]):
         self.on_success = on_success
 
     def compose(self) -> ComposeResult:
+        terminal_exists = os.path.exists(DEFAULT_TERMINAL_PATH)
+        mock_mode_default = not terminal_exists
+
         with Container(id="connect-dialog"):
             yield Static("MT5 Account Connection [F2 / C]", classes="modal-title")
             yield Static("", id="error-banner")
@@ -117,7 +126,12 @@ class ConnectModal(ModalScreen[Optional[AccountConnectRequest]]):
 
             with Vertical(classes="form-field"):
                 yield Static("Login ID:", classes="form-label")
-                yield Input(placeholder="e.g. 1234567", id="input-login", type="integer")
+                yield Input(
+                    value=str(DEFAULT_LOGIN),
+                    placeholder="e.g. 1234567",
+                    id="input-login",
+                    type="integer",
+                )
 
             with Vertical(classes="form-field"):
                 yield Static("Password:", classes="form-label")
@@ -127,16 +141,20 @@ class ConnectModal(ModalScreen[Optional[AccountConnectRequest]]):
                 yield Static("Server:", classes="form-label")
                 yield Select(
                     options=[(s, s) for s, _ in SERVER_CHOICES],
-                    value="Darwinex-Demo",
+                    value=DEFAULT_SERVER,
                     id="select-server",
                 )
 
             with Vertical(classes="form-field"):
                 yield Static("Terminal Path (Optional):", classes="form-label")
-                yield Input(placeholder="Optional path to terminal64.exe", id="input-path")
+                yield Input(
+                    value=DEFAULT_TERMINAL_PATH,
+                    placeholder="Optional path to terminal64.exe",
+                    id="input-path",
+                )
 
             with Horizontal(classes="form-field"):
-                yield Checkbox("Mock Mode", value=True, id="checkbox-mock")
+                yield Checkbox("Mock Mode", value=mock_mode_default, id="checkbox-mock")
 
             with Horizontal(classes="modal-actions"):
                 yield Button("Connect", variant="primary", id="btn-submit")
@@ -177,7 +195,7 @@ class ConnectModal(ModalScreen[Optional[AccountConnectRequest]]):
         login_raw = self.query_one("#input-login", Input).value.strip()
         password = self.query_one("#input-password", Input).value
         server_val = self.query_one("#select-server", Select).value
-        server = str(server_val) if server_val is not Select.BLANK else "Darwinex-Demo"
+        server = str(server_val) if server_val is not Select.BLANK else DEFAULT_SERVER
         path_raw = self.query_one("#input-path", Input).value.strip()
         path = path_raw if path_raw else None
         mock_mode = self.query_one("#checkbox-mock", Checkbox).value

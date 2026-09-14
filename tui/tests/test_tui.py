@@ -14,7 +14,7 @@ Comprehensive BDD coverage across all 9 Gherkin scenarios:
 import pytest
 import httpx
 from unittest.mock import AsyncMock
-from textual.widgets import Button
+from textual.widgets import Button, Checkbox, Input, Select
 
 
 from strategy_engine.models import (
@@ -967,5 +967,123 @@ async def test_simulation_mode_telemetry_and_badge_scenario_9():
         assert data_table.row_count == 1
         assert data_table.get_cell("9001", "symbol") == "EURUSD"
         assert "▲ +$25.00" in str(data_table.get_cell("9001", "pnl"))
+
+
+@pytest.mark.asyncio
+async def test_connect_modal_autodetection_and_account_pinning_terminal_exists(monkeypatch):
+    """
+    Scenario 1: Automatic Detection of Darwinex MT5 Installation when terminal binary exists.
+    Given the Darwinex MetaTrader 5 terminal is installed at "C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe"
+    When the user opens the TUI MT5 Account Connection modal via F2 or C
+    Then the Terminal Path input field is pre-populated with "C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe"
+    And the Server dropdown defaults to "Darwinex-Live"
+    And the Login ID field defaults to "4000073238"
+    And the Mock Mode checkbox is unchecked by default when the terminal binary exists.
+    """
+    import os
+    monkeypatch.setattr(os.path, "exists", lambda path: True if "terminal64.exe" in path else False)
+
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(80, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("f2")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ConnectModal)
+        modal = app.screen
+
+        # Verify auto-detection and account pinning defaults
+        input_login = modal.query_one("#input-login", Input)
+        assert input_login.value == "4000073238"
+
+        select_server = modal.query_one("#select-server", Select)
+        assert select_server.value == "Darwinex-Live"
+
+        input_path = modal.query_one("#input-path", Input)
+        assert input_path.value == r"C:\Program Files\Darwinex MetaTrader 5\terminal64.exe"
+
+        checkbox_mock = modal.query_one("#checkbox-mock", Checkbox)
+        assert checkbox_mock.value is False
+
+
+@pytest.mark.asyncio
+async def test_connect_modal_autodetection_terminal_missing(monkeypatch):
+    """
+    Verify ConnectModal defaults when terminal binary does not exist.
+    Given terminal64.exe does not exist at the default path
+    When ConnectModal is composed
+    Then the Mock Mode checkbox is checked by default (True)
+    And default login is still 4000073238 and server is Darwinex-Live.
+    """
+    import os
+    monkeypatch.setattr(os.path, "exists", lambda path: False)
+
+    modal = ConnectModal()
+    app = DarwinTraderApp()
+    async with app.run_test(size=(80, 40)) as pilot:
+        app.push_screen(modal)
+        await pilot.pause()
+
+        input_login = modal.query_one("#input-login", Input)
+        assert input_login.value == "4000073238"
+
+        select_server = modal.query_one("#select-server", Select)
+        assert select_server.value == "Darwinex-Live"
+
+        input_path = modal.query_one("#input-path", Input)
+        assert input_path.value == r"C:\Program Files\Darwinex MetaTrader 5\terminal64.exe"
+
+        checkbox_mock = modal.query_one("#checkbox-mock", Checkbox)
+        assert checkbox_mock.value is True
+
+
+@pytest.mark.asyncio
+async def test_connect_modal_submit_submits_pinned_account_request(monkeypatch):
+    """
+    Verify submitting ConnectModal with pinned defaults submits the expected AccountConnectRequest.
+    """
+    import os
+    monkeypatch.setattr(os.path, "exists", lambda path: True)
+
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.connect_account.return_value = AccountConnectResponse(
+        status=ConnectionState.CONNECTED,
+        message="Connected to MetaTrader 5 live terminal",
+        login=4000073238,
+        server="Darwinex-Live",
+        trade_mode="REAL",
+        balance=100000.0,
+        currency="USD",
+        account_info=AccountInfo(
+            login=4000073238,
+            server="Darwinex-Live",
+            trade_mode="REAL",
+            balance=100000.0,
+            equity=100000.0,
+        ),
+    )
+
+    modal = ConnectModal(api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(80, 40)) as pilot:
+        app.push_screen(modal)
+        await pilot.pause()
+
+        # Submit with pre-populated values
+        modal.query_one("#btn-submit", Button).press()
+        await pilot.pause()
+
+        # Modal should be dismissed
+        assert app.screen is not modal
+
+        # Assert api_client.connect_account was called with pinned defaults
+        mock_client.connect_account.assert_awaited_once()
+        req = mock_client.connect_account.call_args[0][0]
+        assert req.login == 4000073238
+        assert req.server == "Darwinex-Live"
+        assert req.path == r"C:\Program Files\Darwinex MetaTrader 5\terminal64.exe"
+        assert req.mock_mode is False
+
 
 
