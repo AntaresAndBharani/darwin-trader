@@ -16,6 +16,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Added unit test `test_connection_state_validation` in `strategy_engine/tests/test_strategy.py` verifying serialization and asserting `ValidationError` is raised for invalid status strings.
 
 ### Added
+- **Test Suite & Offline Resilience Verification (Issue #55)**:
+  - Added end-to-end BDD acceptance tests in `tui/tests/test_tui.py` completing full automated coverage for all 9 Gherkin scenarios defined in parent Issue #51:
+    - Scenario 1: Live Telemetry & Financial Metric Synchronization (`test_live_telemetry_synchronization_scenario_1`).
+    - Scenario 2: Active Positions Display and Dynamic Cell Updates (`test_positions_table_rendering_and_in_place_updates`).
+    - Scenario 3: Account Switching via Connection Modal with Dual Keybindings (`test_connect_modal_success_and_account_switching_scenario_3`, `test_app_keybindings_f2_and_c`).
+    - Scenario 4: Safeguarded Emergency Kill Switch with Open Positions (`test_kill_switch_with_open_positions_scenario_4`).
+    - Scenario 5: Backend Offline at Launch & Resilient Reconnect Loop (`test_backend_offline_at_launch_and_reconnect_loop_scenario_5`, `test_api_client_offline_fallback_status`).
+    - Scenario 6: Invalid Credentials Handling in Connect Modal (`test_connect_modal_error_banner_scenario_6`).
+    - Scenario 7: Responsive Terminal Layout Below 80 Columns (`test_responsive_layout_collapse_below_80_columns`).
+    - Scenario 8: Kill-Switch Invocation with Zero Open Positions (`test_kill_switch_with_zero_positions_scenario_8`).
+    - Scenario 9: Simulation Mode Telemetry & Badge (`test_simulation_mode_telemetry_and_badge_scenario_9`, `test_header_bar_badge_modes`).
+  - Validated offline resilience, reconnect timer tick callbacks, and automated recovery when backend comes online.
+
 - **Strategy Control Panel & Action Confirmation Modals (Issue #54)**:
   - Implemented `StrategyPanel` widget (`tui/widgets/strategy_panel.py`) displaying strategy execution state badges (`[● RUNNING]`, `[⏸ PAUSED]`, `[■ STOPPED]`, `[● IDLE]`), strategy and symbol identifier, daily drawdown percentage with warning highlight (>= 3.0%), and total exposure lots calculated across open positions.
   - Implemented `ConfirmModal` screen (`tui/screens/confirm_modal.py`) with support for high-contrast emergency danger styling and informational prompts.

@@ -1,9 +1,15 @@
 """
 Unit and integration tests for Darwin Trader TUI.
-Covers:
-- DarwinApiClient with mock responses and offline fallback behavior
-- HeaderBar visual badge formatting (Live, Demo, Simulation, Unreachable)
-- DarwinTraderApp base layout, mounting, and dual keybindings (F2 and C)
+Comprehensive BDD coverage across all 9 Gherkin scenarios:
+- Scenario 1: Live Telemetry & Financial Metric Synchronization (test_live_telemetry_synchronization_scenario_1, test_summary_cards_dual_glyph_and_formatting)
+- Scenario 2: Active Positions Display and Dynamic Cell Updates (test_positions_table_rendering_and_in_place_updates)
+- Scenario 3: Account Switching via Connection Modal with Dual Keybindings (test_connect_modal_success_and_account_switching_scenario_3, test_app_keybindings_f2_and_c)
+- Scenario 4: Safeguarded Emergency Kill Switch with Open Positions (test_kill_switch_with_open_positions_scenario_4)
+- Scenario 5: Backend Offline at Launch & Resilient Reconnect Loop (test_backend_offline_at_launch_and_reconnect_loop_scenario_5, test_api_client_offline_fallback_status)
+- Scenario 6: Invalid Credentials Handling in Connect Modal (test_connect_modal_error_banner_scenario_6)
+- Scenario 7: Responsive Terminal Layout Below 80 Columns (test_responsive_layout_collapse_below_80_columns)
+- Scenario 8: Kill-Switch Invocation with Zero Open Positions (test_kill_switch_with_zero_positions_scenario_8)
+- Scenario 9: Simulation Mode Telemetry & Badge (test_simulation_mode_telemetry_and_badge_scenario_9, test_header_bar_badge_modes)
 """
 import pytest
 import httpx
@@ -751,4 +757,215 @@ async def test_connect_modal_error_banner_scenario_6():
         assert "Invalid account login or password" in str(banner.content)
         # Input fields preserved
         assert modal.query_one("#input-login").value == "123"
+
+
+@pytest.mark.asyncio
+async def test_live_telemetry_synchronization_scenario_1():
+    """Verify Scenario 1: Live Telemetry & Financial Metric Synchronization.
+
+    Given the FastAPI backend is running and connected to a Darwinex-Live account
+    When the user launches the Darwin Trader TUI via `python -m tui`
+    Then the HeaderBar displays a green "[● CONNECTED (LIVE)]" status badge with active server and account login ID
+    And the SummaryCards display current Balance, Equity, Margin, and Floating P&L formatted in USD currency
+    And positive Floating P&L values are dual-signaled with a green "▲" glyph, while negative values are styled with a red "▼" glyph.
+    """
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        mock_mode=False,
+        latency_ms=12.0,
+        account_info=AccountInfo(
+            login=987654,
+            server="Darwinex-Live",
+            balance=50000.0,
+            equity=52500.0,
+            margin=1200.0,
+            profit=2500.0,
+        ),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {
+        "status": "IDLE",
+        "strategy_name": "Darwin_Trend_ATR_V1",
+        "symbol": "EURUSD",
+    }
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        # Check HeaderBar
+        badge = app.query_one("#status-badge")
+        info = app.query_one("#telemetry-info")
+        assert "[● CONNECTED (LIVE)]" in str(badge.content)
+        assert "status-connected-live" in badge.classes
+        assert "Server: Darwinex-Live" in str(info.content)
+        assert "Login: 987654" in str(info.content)
+
+        # Check SummaryCards
+        summary = app.query_one(SummaryCards)
+        bal_val = summary.query_one("#card-balance-value")
+        eq_val = summary.query_one("#card-equity-value")
+        mar_val = summary.query_one("#card-margin-value")
+        pnl_val = summary.query_one("#card-pnl-value")
+        pnl_card = summary.query_one("#card-pnl", MetricCard)
+
+        assert str(bal_val.content) == "$50,000.00"
+        assert str(eq_val.content) == "$52,500.00"
+        assert str(mar_val.content) == "$1,200.00"
+        assert "▲ +$2,500.00" in str(pnl_val.content)
+        assert "profit-positive" in pnl_card.classes
+
+        # Negative Floating P&L transition
+        mock_client.get_account_status.return_value = ConnectionStatus(
+            status=ConnectionState.CONNECTED,
+            server="Darwinex-Live",
+            mock_mode=False,
+            latency_ms=14.0,
+            account_info=AccountInfo(
+                login=987654,
+                server="Darwinex-Live",
+                balance=50000.0,
+                equity=48500.0,
+                margin=1200.0,
+                profit=-1500.0,
+            ),
+        )
+        await app.poll_telemetry()
+        await pilot.pause()
+
+        assert "▼ -$1,500.00" in str(pnl_val.content)
+        assert "profit-negative" in pnl_card.classes
+
+
+@pytest.mark.asyncio
+async def test_backend_offline_at_launch_and_reconnect_loop_scenario_5():
+    """Verify Scenario 5: Backend Offline at Launch & Resilient Reconnect Loop.
+
+    Given the FastAPI backend is unreachable or down at startup
+    When the user launches the TUI
+    Then the HeaderBar displays an amber "[○ GATEWAY UNREACHABLE]" warning badge with a reconnect countdown timer
+    And background polling continues every 3 seconds without raising unhandled connection exceptions
+    And when the FastAPI server comes online, the TUI automatically synchronizes telemetry and transitions to normal operation.
+    """
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    # 1. Startup: Gateway unreachable
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.DISCONNECTED,
+        server="Unknown",
+        mock_mode=False,
+        last_error="Connection refused: http://127.0.0.1:8000",
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = None
+
+    app = DarwinTraderApp(api_client=mock_client, poll_interval=3.0)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        badge = app.query_one("#status-badge")
+        assert "[○ GATEWAY UNREACHABLE" in str(badge.content)
+        assert "status-offline" in badge.classes
+
+        # Verify timer countdown tick
+        await app._tick_timer()
+        await pilot.pause()
+        assert "[○ GATEWAY UNREACHABLE (2s)]" in str(badge.content)
+
+        # 2. FastAPI backend comes online
+        mock_client.get_account_status.return_value = ConnectionStatus(
+            status=ConnectionState.CONNECTED,
+            server="Darwinex-Live",
+            mock_mode=False,
+            latency_ms=10.0,
+            account_info=AccountInfo(
+                login=334455,
+                server="Darwinex-Live",
+                balance=25000.0,
+                equity=25000.0,
+                margin=0.0,
+                profit=0.0,
+            ),
+        )
+        mock_client.get_strategy_status.return_value = {
+            "status": "RUNNING",
+            "strategy_name": "Darwin_Trend_ATR_V1",
+            "symbol": "EURUSD",
+        }
+
+        # Poll runs when countdown expires or on poll_telemetry
+        await app.poll_telemetry()
+        await pilot.pause()
+
+        # Telemetry automatically transitions to normal operation
+        assert "[● CONNECTED (LIVE)]" in str(badge.content)
+        assert "status-connected-live" in badge.classes
+        info = app.query_one("#telemetry-info")
+        assert "Server: Darwinex-Live" in str(info.content)
+        assert "Login: 334455" in str(info.content)
+
+
+@pytest.mark.asyncio
+async def test_simulation_mode_telemetry_and_badge_scenario_9():
+    """Verify Scenario 9: Simulation Mode Telemetry & Badge.
+
+    Given the user connects with Mock Mode enabled or server is set to a demo sandbox
+    When connection succeeds
+    Then the HeaderBar displays a cyan/amber "[● SIMULATION] badge"
+    And the SummaryCards and PositionsTable display simulated execution telemetry without sending live broker orders.
+    """
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        mock_mode=True,
+        latency_ms=5.0,
+        account_info=AccountInfo(
+            login=777888,
+            server="Darwinex-Live",
+            balance=100000.0,
+            equity=100250.0,
+            margin=500.0,
+            profit=250.0,
+        ),
+    )
+    sim_position = Position(
+        ticket=9001,
+        symbol="EURUSD",
+        order_type=OrderType.BUY,
+        volume=0.10,
+        open_price=1.0850,
+        current_price=1.0875,
+        sl=1.0800,
+        tp=1.0950,
+        pnl=25.0,
+        swap=0.0,
+    )
+    mock_client.get_positions.return_value = [sim_position]
+    mock_client.get_strategy_status.return_value = {
+        "status": "RUNNING",
+        "strategy_name": "Darwin_Trend_ATR_V1",
+        "symbol": "EURUSD",
+    }
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        header = app.query_one(HeaderBar)
+        badge = header.query_one("#status-badge")
+        assert "[● SIMULATION]" in str(badge.content)
+        assert "status-simulation" in badge.classes
+
+        summary = app.query_one(SummaryCards)
+        bal_val = summary.query_one("#card-balance-value")
+        assert str(bal_val.content) == "$100,000.00"
+
+        table = app.query_one(PositionsTable)
+        data_table = table.query_one("#positions-data-table")
+        assert data_table.row_count == 1
+        assert data_table.get_cell("9001", "symbol") == "EURUSD"
+        assert "▲ +$25.00" in str(data_table.get_cell("9001", "pnl"))
+
 
