@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock
 from textual.widgets import Button, Checkbox, Input, Select, Static
 
 
+
 from strategy_engine.models import (
     AccountConnectRequest,
     AccountConnectResponse,
@@ -1093,7 +1094,6 @@ async def test_connect_modal_submit_submits_pinned_account_request(monkeypatch):
         assert req.path == r"C:\Program Files\Darwinex MetaTrader 5\terminal64.exe"
         assert req.mock_mode is False
 
-
 # =============================================================================
 # Issue #60: DarwinX Zero BDD Test Suite (Scenarios 2 to 6)
 # =============================================================================
@@ -1399,6 +1399,5 @@ async def test_graceful_mock_fallback_non_windows_or_missing_dep_scenario_6():
         # Badge reflects SIMULATION mode without unhandled errors
         assert "[● SIMULATION]" in str(badge.content)
         assert "status-simulation" in badge.classes
-
 
 
