@@ -432,4 +432,53 @@ def test_mt5_connector_attach_to_running_instance(monkeypatch):
     assert info.trade_mode == "REAL"
 
 
+def test_get_open_positions_all_symbols_and_filtering(monkeypatch):
+    from collections import namedtuple
+    import strategy_engine.mt5_connector as mc
+
+    FakePos = namedtuple("FakePos", [
+        "ticket", "symbol", "type", "magic", "volume",
+        "price_open", "price_current", "sl", "tp", "profit", "swap", "time"
+    ])
+
+    fake_positions = (
+        FakePos(101, "AMZN", 0, 0, 40.0, 246.72, 253.67, 195.0, 0.0, 278.0, 0.0, 1767994216),
+        FakePos(102, "NVDA", 0, 0, 500.0, 186.97, 221.76, 0.0, 0.0, 17395.0, 0.0, 1768253775),
+        FakePos(103, "EURUSD", 1, 20260811, 1.0, 1.0850, 1.0820, 1.090, 0.0, 300.0, -2.5, 1768254624),
+    )
+
+    class FakeMT5:
+        @staticmethod
+        def positions_get(symbol=None):
+            if symbol is not None:
+                return tuple(p for p in fake_positions if p.symbol == symbol)
+            return fake_positions
+
+    monkeypatch.setattr(mc, "HAS_MT5", True)
+    monkeypatch.setattr(mc, "mt5", FakeMT5)
+
+    config = StrategyConfig(mock_mode=False)
+    connector = MT5Connector(config)
+    connector.is_connected = True
+
+    # Retrieve all open positions across symbols and magics
+    all_positions = connector.get_open_positions()
+    assert len(all_positions) == 3
+    symbols = [p.symbol for p in all_positions]
+    assert symbols == ["AMZN", "NVDA", "EURUSD"]
+    assert all_positions[0].magic == 0
+    assert all_positions[0].volume == 40.0
+    assert all_positions[0].pnl == 278.0
+
+    # Retrieve filtered by symbol
+    amzn_positions = connector.get_open_positions(symbol="AMZN")
+    assert len(amzn_positions) == 1
+    assert amzn_positions[0].symbol == "AMZN"
+    assert amzn_positions[0].ticket == 101
+
+    # Empty for nonexistent symbol
+    none_positions = connector.get_open_positions(symbol="NONEXISTENT")
+    assert len(none_positions) == 0
+
+
 

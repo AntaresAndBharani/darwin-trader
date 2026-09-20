@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Multi-Symbol & Discretionary Positions Retrieval in MT5Connector**:
+  - Broadened `MT5Connector.get_open_positions(symbol=None)` in `strategy_engine/mt5_connector.py` to retrieve all open positions across all traded symbols and asset classes (stocks, forex, indices) when `symbol` is omitted.
+  - Removed strict `pos.magic == self.config.magic_number` filter so manual and discretionary positions (`magic == 0`) opened in the terminal are populated in the TUI positions table and account telemetry.
+  - Extracted MT5 position timestamp into `open_time` with UTC fallback and captured `pos.swap`.
+  - Added unit test in `strategy_engine/tests/test_strategy.py` verifying multi-symbol position retrieval, magic 0 handling, and symbol-specific filtering.
+
 ### Added
 - **FastAPI Asset Router, Gateway Mounting, Client SDK & Integration Tests (Issue #69)**:
   - Created dedicated FastAPI asset router in `api_gateway/routes_assets.py` mounted at `/api/v1/assets` with category and substring search query parameters.

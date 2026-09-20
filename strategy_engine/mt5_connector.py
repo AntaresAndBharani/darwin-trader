@@ -233,34 +233,49 @@ class MT5Connector:
                 d_score=78.2
             )
 
-    def get_open_positions(self) -> List[Position]:
+    def get_open_positions(self, symbol: Optional[str] = None) -> List[Position]:
         """
-        Returns list of active open positions for strategy magic number.
+        Returns list of active open positions for the account across all symbols,
+        or filtered by symbol if specified.
         """
         with self._lock:
             if self.config.mock_mode or not HAS_MT5 or not self.is_connected:
+                if symbol:
+                    return [p for p in self._mock_positions if p.symbol == symbol]
                 return list(self._mock_positions)
 
-            mt5_positions = mt5.positions_get(symbol=self.config.symbol)
+            if symbol:
+                mt5_positions = mt5.positions_get(symbol=symbol)
+            else:
+                mt5_positions = mt5.positions_get()
+
             if mt5_positions is None:
                 return []
 
             positions = []
             for pos in mt5_positions:
-                if pos.magic == self.config.magic_number:
-                    order_type = OrderType.BUY if pos.type == 0 else OrderType.SELL
-                    positions.append(Position(
-                        ticket=pos.ticket,
-                        symbol=pos.symbol,
-                        order_type=order_type,
-                        volume=pos.volume,
-                        open_price=pos.price_open,
-                        current_price=pos.price_current,
-                        sl=pos.sl,
-                        tp=pos.tp,
-                        pnl=pos.profit,
-                        magic=pos.magic
-                    ))
+                order_type = OrderType.BUY if pos.type == 0 else OrderType.SELL
+                open_time = datetime.utcnow()
+                if hasattr(pos, "time") and pos.time:
+                    try:
+                        open_time = datetime.utcfromtimestamp(pos.time)
+                    except Exception:
+                        open_time = datetime.utcnow()
+
+                positions.append(Position(
+                    ticket=pos.ticket,
+                    symbol=pos.symbol,
+                    order_type=order_type,
+                    volume=pos.volume,
+                    open_price=pos.price_open,
+                    current_price=pos.price_current,
+                    sl=pos.sl,
+                    tp=pos.tp,
+                    pnl=pos.profit,
+                    swap=getattr(pos, "swap", 0.0),
+                    open_time=open_time,
+                    magic=pos.magic
+                ))
             return positions
 
     def execute_order(self, signal: TradeSignal) -> Tuple[bool, str]:
