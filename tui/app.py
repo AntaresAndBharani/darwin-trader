@@ -13,6 +13,7 @@ from textual.widgets import Footer
 from .api_client import DarwinApiClient
 from .screens.connect_modal import ConnectModal
 from .screens.confirm_modal import ConfirmModal
+from .screens.asset_explorer_modal import AssetExplorerModal
 from .widgets.header_bar import HeaderBar
 from .widgets.summary_cards import SummaryCards
 from .widgets.positions_table import PositionsTable
@@ -42,6 +43,8 @@ class DarwinTraderApp(App[None]):
     BINDINGS = [
         Binding("f2", "open_connect_modal", "Connect", show=True),
         Binding("c", "open_connect_modal", "Connect", show=True),
+        Binding("a", "open_asset_explorer", "Assets", show=True),
+        Binding("f3", "open_asset_explorer", "Assets", show=True),
         Binding("k", "kill_switch", "Kill Switch", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
@@ -140,6 +143,10 @@ class DarwinTraderApp(App[None]):
             await self.poll_telemetry()
 
         self.push_screen(ConnectModal(api_client=self.api_client, on_success=_on_connected_callback))
+
+    def action_open_asset_explorer(self) -> None:
+        """Action invoked by A or F3 keybinding to open Asset Explorer modal."""
+        self.push_screen(AssetExplorerModal(api_client=self.api_client))
 
     async def action_kill_switch(self) -> None:
         """
