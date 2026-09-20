@@ -123,3 +123,28 @@ class ConnectionStatus(BaseModel):
     connected_at: Optional[datetime] = None
     last_error: Optional[str] = None
     account_info: Optional[AccountInfo] = None
+
+
+class AssetCategory(str, Enum):
+    ALL = "all"
+    STOCKS = "stocks"
+    ETFS = "etfs"
+    FOREX = "forex"
+
+
+class AssetInfo(BaseModel):
+    symbol: str
+    description: str = ""
+    category: str = ""
+    currency: str = "USD"
+    visible: bool = True
+    lot_min: float = 0.01
+    lot_max: float = 100.0
+    lot_step: float = 0.01
+    digits: int = 2
+    point: float = 0.01
+    filling_mode: int = 1
+    trade_mode: int = 4
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+

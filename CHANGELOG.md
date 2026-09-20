@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Strategy Engine Models, Thread-Safe Connector & Unit Tests (Issue #68)**:
+  - Defined `AssetCategory` enum (`all`, `stocks`, `etfs`, `forex`) and `AssetInfo` model in `strategy_engine/models.py` capturing full contract specifications (`lot_min`, `lot_max`, `lot_step`, `digits`, `point`, `filling_mode`, `trade_mode`) with optional `bid` and `ask` live quotes.
+  - Implemented thread-safe `MT5Connector.get_available_assets()` using double-checked locking with shallow snapshots (`list(self._symbols_cache.values())`) under `self._lock`, preventing `RuntimeError: dictionary changed size during iteration` during concurrent reads and cache invalidations.
+  - Added category prefix filtering, case-insensitive substring search across tickers and company names, and error contracts for unsupported categories.
+  - Implemented single-asset contract specifications lookup `MT5Connector.get_asset_info()` with graceful degradation of `bid` and `ask` to `None` during closed market conditions or weekends.
+  - Implemented immediate in-memory cache invalidation on account switching in `MT5Connector.initialize()` and `disconnect()`.
+  - Added deterministic 8-symbol mock fixture (`AMZN`, `NVDA`, `MSFT`, `PM`, `AAPL`, `SPY`, `QQQ`, `EURUSD`) for headless CI test environments.
+  - Added comprehensive unit and concurrency test suite in `strategy_engine/tests/test_assets_connector.py` covering Gherkin scenarios 1 through 7.
+
 - **DarwinX Zero Drawdown Monitoring & Comprehensive Test Suite (Issue #63)**:
   - Rendered DarwinX Zero 3.0% maximum daily drawdown limit alongside active floating drawdown percentage in `StrategyPanel` (`tui/widgets/strategy_panel.py`).
   - Implemented real-time status badging in `StrategyPanel`: green `[● SAFE]` badge for drawdown below 2.0%, amber `[⚠ WARNING]` badge for drawdown reaching or exceeding the 2.5% buffer threshold (`drawdown_warning_pct`), and `[⛔ BREACH]` badge for drawdown reaching or exceeding the 3.0% hard limit.
