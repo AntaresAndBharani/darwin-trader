@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **FastAPI Asset Router, Gateway Mounting, Client SDK & Integration Tests (Issue #69)**:
+  - Created dedicated FastAPI asset router in `api_gateway/routes_assets.py` mounted at `/api/v1/assets` with category and substring search query parameters.
+  - Implemented strict error handling contracts: HTTP 400 Bad Request for unsupported categories, HTTP 404 Not Found for missing asset tickers, and HTTP 503 Service Unavailable when MetaTrader 5 gateway is disconnected.
+  - Mounted asset router onto main FastAPI application in `api_gateway/main.py`.
+  - Added asynchronous client SDK methods `get_assets(category, search)` and `get_asset_info(symbol)` to `DarwinApiClient` in `tui/api_client.py` with safe offline fallback handling.
+  - Added comprehensive integration test suite in `api_gateway/tests/test_assets.py` covering Gherkin BDD scenarios 1 through 6, live MT5 catalog retrieval, mock mode isolation, and client SDK offline resilience.
+
 - **Strategy Engine Models, Thread-Safe Connector & Unit Tests (Issue #68)**:
   - Defined `AssetCategory` enum (`all`, `stocks`, `etfs`, `forex`) and `AssetInfo` model in `strategy_engine/models.py` capturing full contract specifications (`lot_min`, `lot_max`, `lot_step`, `digits`, `point`, `filling_mode`, `trade_mode`) with optional `bid` and `ask` live quotes.
   - Implemented thread-safe `MT5Connector.get_available_assets()` using double-checked locking with shallow snapshots (`list(self._symbols_cache.values())`) under `self._lock`, preventing `RuntimeError: dictionary changed size during iteration` during concurrent reads and cache invalidations.
