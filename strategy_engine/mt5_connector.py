@@ -8,7 +8,16 @@ import threading
 import time
 
 from .config import StrategyConfig
-from .models import AccountInfo, Position, OrderType, TradeSignal, SignalType, ConnectionStatus
+from .models import (
+    AccountInfo,
+    Position,
+    OrderType,
+    TradeSignal,
+    SignalType,
+    ConnectionStatus,
+    AssetInfo,
+    AssetCategory,
+)
 
 # Try importing MetaTrader5 (available on Windows platform)
 mt5 = None
@@ -71,6 +80,11 @@ class MT5Connector:
         self._mock_positions: List[Position] = []
         self._mock_balance: float = 100000.0
         self._mock_ticket_counter: int = 100001
+        self._mock_market_open: bool = True
+        # In-memory asset catalog cache protected by self._lock
+        self._symbols_cache: dict = {}
+        self._cache_timestamp: float = 0.0
+        self._cache_ttl: float = 60.0
 
     def initialize(self) -> Tuple[bool, str]:
         """
@@ -79,6 +93,9 @@ class MT5Connector:
         password re-entry, or initiating a new session with credentials.
         """
         with self._lock:
+            # Clear symbol catalog cache on connection/account switch
+            self._symbols_cache.clear()
+            self._cache_timestamp = 0.0
             start_time = time.perf_counter()
             if self.config.mock_mode or not HAS_MT5:
                 self.is_connected = True
@@ -151,6 +168,8 @@ class MT5Connector:
         """
         with self._lock:
             self.last_error = None
+            self._symbols_cache.clear()
+            self._cache_timestamp = 0.0
             if HAS_MT5 and not self.config.mock_mode:
                 try:
                     mt5.shutdown()
@@ -326,3 +345,206 @@ class MT5Connector:
                     closed_count += 1
 
             return closed_count, f"Live Kill Switch triggered: Closed {closed_count} open positions"
+
+    def clear_cache(self) -> None:
+        """
+        Explicitly invalidates the in-memory symbol catalog cache under self._lock.
+        """
+        with self._lock:
+            self._symbols_cache.clear()
+            self._cache_timestamp = 0.0
+
+    def _get_mock_catalog(self) -> List[AssetInfo]:
+        """
+        Returns deterministic mock assets fixture for headless testing:
+        5 US stocks across Nasdaq/NYSE, 2 ETFs, and 1 Forex pair.
+        """
+        return [
+            AssetInfo(symbol="AMZN", description="Amazon.com Inc", category="Stocks/US/Nasdaq"),
+            AssetInfo(symbol="NVDA", description="NVIDIA Corp", category="Stocks/US/Nasdaq"),
+            AssetInfo(symbol="MSFT", description="Microsoft Corp", category="Stocks/US/Nasdaq"),
+            AssetInfo(symbol="PM", description="Philip Morris International", category="Stocks/US/NYSE"),
+            AssetInfo(symbol="AAPL", description="Apple Inc", category="Stocks/US/Nasdaq"),
+            AssetInfo(symbol="SPY", description="SPDR S&P 500 ETF Trust", category="ETFs/US/NYSE"),
+            AssetInfo(symbol="QQQ", description="Invesco QQQ Trust", category="ETFs/US/Nasdaq"),
+            AssetInfo(symbol="EURUSD", description="Euro vs US Dollar", category="Forex/Majors", digits=5, point=0.00001),
+        ]
+
+    def _refresh_symbols_cache_locked(self) -> None:
+        """
+        Populates or refreshes the symbols cache under self._lock.
+        Decouples static contract specs from on-demand single tick queries.
+        """
+        if self.config.mock_mode or not HAS_MT5 or not self.is_connected:
+            self._symbols_cache = {a.symbol: a for a in self._get_mock_catalog()}
+            self._cache_timestamp = time.time()
+            return
+
+        # Query full broker catalog from MT5 master database without sequential symbol_select
+        mt5_symbols = mt5.symbols_get()
+        if mt5_symbols is None:
+            self._symbols_cache = {}
+            self._cache_timestamp = time.time()
+            return
+
+        cache = {}
+        for s in mt5_symbols:
+            norm_category = s.path.replace("\\", "/") if getattr(s, "path", None) else ""
+            currency = (
+                getattr(s, "currency_profit", None)
+                or getattr(s, "currency_base", None)
+                or "USD"
+            )
+            cache[s.name] = AssetInfo(
+                symbol=s.name,
+                description=getattr(s, "description", "") or "",
+                category=norm_category,
+                currency=currency,
+                visible=bool(getattr(s, "visible", True)),
+                lot_min=getattr(s, "volume_min", 0.01),
+                lot_max=getattr(s, "volume_max", 100.0),
+                lot_step=getattr(s, "volume_step", 0.01),
+                digits=getattr(s, "digits", 2),
+                point=getattr(s, "point", 0.01),
+                filling_mode=getattr(s, "filling_mode", 0),
+                trade_mode=getattr(s, "trade_mode", 4),
+                bid=None,
+                ask=None,
+            )
+        self._symbols_cache = cache
+        self._cache_timestamp = time.time()
+
+    def get_available_assets(
+        self,
+        category: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> List[AssetInfo]:
+        """
+        Retrieves available tradeable assets with static contract specifications.
+        Uses double-checked locking with shallow snapshots under self._lock to ensure
+        thread safety and prevent dictionary mutation race conditions.
+        """
+        if not self.config.mock_mode and not self.is_connected:
+            raise ConnectionError("MetaTrader 5 gateway disconnected")
+
+        cat_clean: Optional[str] = None
+        if category:
+            cat_clean = (
+                category.value.lower()
+                if isinstance(category, AssetCategory)
+                else str(category).strip().lower()
+            )
+            valid_categories = {c.value for c in AssetCategory}
+            if cat_clean not in valid_categories:
+                raise ValueError(
+                    f"Invalid category '{category}'. Supported categories: all, stocks, etfs, forex"
+                )
+
+        now = time.time()
+        if not self._symbols_cache or (now - self._cache_timestamp > self._cache_ttl):
+            with self._lock:
+                if not self._symbols_cache or (now - self._cache_timestamp > self._cache_ttl):
+                    self._refresh_symbols_cache_locked()
+
+        with self._lock:
+            symbols = list(self._symbols_cache.values())
+
+        if cat_clean and cat_clean != AssetCategory.ALL.value:
+            prefix = f"{cat_clean}/"
+            symbols = [s for s in symbols if s.category.lower().startswith(prefix)]
+
+        if search:
+            term = search.strip().lower()
+            if term:
+                symbols = [
+                    s for s in symbols
+                    if term in s.symbol.lower() or term in s.description.lower()
+                ]
+
+        return symbols
+
+    def get_asset_info(self, symbol: str) -> Optional[AssetInfo]:
+        """
+        Fetches full contract specifications for a single symbol, including
+        on-demand live bid/ask quotes. Returns None for bid/ask if the market is closed.
+        """
+        if not self.config.mock_mode and not self.is_connected:
+            raise ConnectionError("MetaTrader 5 gateway disconnected")
+
+        target = symbol.strip().upper()
+
+        if self.config.mock_mode or not HAS_MT5:
+            with self._lock:
+                if not self._symbols_cache:
+                    self._refresh_symbols_cache_locked()
+
+                asset = self._symbols_cache.get(target)
+                if not asset:
+                    for a in self._symbols_cache.values():
+                        if a.symbol.upper() == target:
+                            asset = a
+                            break
+                if not asset:
+                    return None
+
+                mock_asset = asset.model_copy()
+                if self._mock_market_open:
+                    quotes = {
+                        "AMZN": (185.50, 185.60),
+                        "NVDA": (125.20, 125.30),
+                        "MSFT": (420.10, 420.25),
+                        "PM": (115.30, 115.45),
+                        "AAPL": (225.40, 225.55),
+                        "SPY": (550.00, 550.10),
+                        "QQQ": (480.00, 480.15),
+                        "EURUSD": (1.0850, 1.0852),
+                    }
+                    bid, ask = quotes.get(mock_asset.symbol, (100.0, 100.1))
+                    mock_asset.bid = bid
+                    mock_asset.ask = ask
+                else:
+                    mock_asset.bid = None
+                    mock_asset.ask = None
+                return mock_asset
+
+        with self._lock:
+            s = mt5.symbol_info(symbol)
+            if s is None:
+                return None
+
+            tick = mt5.symbol_info_tick(symbol)
+            bid = None
+            ask = None
+            if tick is not None:
+                if getattr(tick, "bid", 0.0) > 0:
+                    bid = tick.bid
+                if getattr(tick, "ask", 0.0) > 0:
+                    ask = tick.ask
+            elif getattr(s, "bid", 0.0) > 0 or getattr(s, "ask", 0.0) > 0:
+                bid = s.bid if getattr(s, "bid", 0.0) > 0 else None
+                ask = s.ask if getattr(s, "ask", 0.0) > 0 else None
+
+            norm_category = s.path.replace("\\", "/") if getattr(s, "path", None) else ""
+            currency = (
+                getattr(s, "currency_profit", None)
+                or getattr(s, "currency_base", None)
+                or "USD"
+            )
+
+            return AssetInfo(
+                symbol=s.name,
+                description=getattr(s, "description", "") or "",
+                category=norm_category,
+                currency=currency,
+                visible=bool(getattr(s, "visible", True)),
+                lot_min=getattr(s, "volume_min", 0.01),
+                lot_max=getattr(s, "volume_max", 100.0),
+                lot_step=getattr(s, "volume_step", 0.01),
+                digits=getattr(s, "digits", 2),
+                point=getattr(s, "point", 0.01),
+                filling_mode=getattr(s, "filling_mode", 0),
+                trade_mode=getattr(s, "trade_mode", 4),
+                bid=bid,
+                ask=ask,
+            )
+
