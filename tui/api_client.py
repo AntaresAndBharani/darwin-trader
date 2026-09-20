@@ -10,6 +10,7 @@ from strategy_engine.models import (
     AccountConnectRequest,
     AccountConnectResponse,
     AccountInfo,
+    AssetInfo,
     ConnectionState,
     ConnectionStatus,
     Position,
@@ -182,3 +183,42 @@ class DarwinApiClient:
                 "detail": str(exc),
                 "status": "ERROR",
             }
+
+    async def get_assets(
+        self,
+        category: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> List[AssetInfo]:
+        """
+        GET /api/v1/assets
+        Returns available tradeable assets filtered by category and/or search substring.
+        Returns empty list if gateway is unreachable or an error occurs.
+        """
+        try:
+            client = await self.get_client()
+            params: Dict[str, str] = {}
+            if category:
+                params["category"] = category
+            if search:
+                params["search"] = search
+            resp = await client.get("/api/v1/assets", params=params)
+            resp.raise_for_status()
+            raw_list = resp.json()
+            return [AssetInfo(**item) for item in raw_list]
+        except Exception:
+            return []
+
+    async def get_asset_info(self, symbol: str) -> Optional[AssetInfo]:
+        """
+        GET /api/v1/assets/{symbol}
+        Fetches full contract specifications for a single asset symbol.
+        Returns None if not found or gateway is unreachable.
+        """
+        try:
+            client = await self.get_client()
+            resp = await client.get(f"/api/v1/assets/{symbol.strip()}")
+            resp.raise_for_status()
+            return AssetInfo(**resp.json())
+        except Exception:
+            return None
+

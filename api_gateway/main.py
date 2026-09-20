@@ -9,6 +9,7 @@ from datetime import datetime
 
 from .routes_strategy import router as strategy_router, connector
 from .routes_account import router as account_router
+from .routes_assets import router as assets_router
 
 app = FastAPI(
     title="Darwin Trader API Gateway",
@@ -27,6 +28,7 @@ app.add_middleware(
 
 app.include_router(strategy_router)
 app.include_router(account_router)
+app.include_router(assets_router)
 
 
 @app.get("/")
