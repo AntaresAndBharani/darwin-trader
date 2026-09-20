@@ -14,6 +14,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Added unit test in `strategy_engine/tests/test_strategy.py` verifying multi-symbol position retrieval, magic 0 handling, and symbol-specific filtering.
 
 ### Added
+- **Interactive TUI Asset Explorer Modal**:
+  - Implemented `AssetExplorerModal` in `tui/screens/asset_explorer_modal.py` enabling full-screen catalog discovery, real-time substring search across tickers and descriptions, category switching (`stocks`, `etfs`, `forex`, `all`), and live contract specification inspection (`lot_min`, `lot_max`, `bid`, `ask`).
+  - Exported `AssetExplorerModal` in `tui/screens/__init__.py`.
+  - Added dual keybindings `A` and `F3` to `DarwinTraderApp.BINDINGS` in `tui/app.py` with action handler `action_open_asset_explorer` and Footer visibility.
+  - Added comprehensive Textual pilot and unit test suite in `tui/tests/test_tui.py` covering modal invocation, catalog display, real-time search filtering, category switching, offline error fallback banner, and dismissal via `Escape` or `Close` button.
+
 - **FastAPI Asset Router, Gateway Mounting, Client SDK & Integration Tests (Issue #69)**:
   - Created dedicated FastAPI asset router in `api_gateway/routes_assets.py` mounted at `/api/v1/assets` with category and substring search query parameters.
   - Implemented strict error handling contracts: HTTP 400 Bad Request for unsupported categories, HTTP 404 Not Found for missing asset tickers, and HTTP 503 Service Unavailable when MetaTrader 5 gateway is disconnected.

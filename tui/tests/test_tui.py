@@ -22,7 +22,7 @@ Comprehensive BDD coverage across:
 import pytest
 import httpx
 from unittest.mock import AsyncMock
-from textual.widgets import Button, Checkbox, Input, Select, Static
+from textual.widgets import Button, Checkbox, DataTable, Input, Select, Static
 
 
 
@@ -30,6 +30,7 @@ from strategy_engine.models import (
     AccountConnectRequest,
     AccountConnectResponse,
     AccountInfo,
+    AssetInfo,
     ConnectionState,
     ConnectionStatus,
     OrderType,
@@ -39,6 +40,7 @@ from tui.api_client import DarwinApiClient
 from tui.app import DarwinTraderApp
 from tui.screens.connect_modal import ConnectModal
 from tui.screens.confirm_modal import ConfirmModal
+from tui.screens.asset_explorer_modal import AssetExplorerModal
 from tui.widgets.header_bar import HeaderBar
 from tui.widgets.summary_cards import SummaryCards, MetricCard
 from tui.widgets.positions_table import PositionsTable
@@ -1399,5 +1401,199 @@ async def test_graceful_mock_fallback_non_windows_or_missing_dep_scenario_6():
         # Badge reflects SIMULATION mode without unhandled errors
         assert "[● SIMULATION]" in str(badge.content)
         assert "status-simulation" in badge.classes
+
+
+MOCK_EXPLORER_ASSETS = [
+    AssetInfo(
+        symbol="AMZN",
+        description="Amazon.com Inc",
+        category="Stocks/US/Nasdaq",
+        currency="USD",
+        lot_min=1.0,
+        lot_max=500.0,
+        lot_step=1.0,
+        digits=2,
+        point=0.01,
+        bid=253.67,
+        ask=253.70,
+    ),
+    AssetInfo(
+        symbol="NVDA",
+        description="NVIDIA Corp",
+        category="Stocks/US/Nasdaq",
+        currency="USD",
+        lot_min=1.0,
+        lot_max=500.0,
+        lot_step=1.0,
+        digits=2,
+        point=0.01,
+        bid=221.76,
+        ask=221.80,
+    ),
+    AssetInfo(
+        symbol="MSFT",
+        description="Microsoft Corp",
+        category="Stocks/US/Nasdaq",
+        currency="USD",
+        lot_min=1.0,
+        lot_max=500.0,
+        lot_step=1.0,
+        digits=2,
+        point=0.01,
+        bid=492.82,
+        ask=492.88,
+    ),
+    AssetInfo(
+        symbol="PM",
+        description="Philip Morris International",
+        category="Stocks/US/NYSE",
+        currency="USD",
+        lot_min=1.0,
+        lot_max=500.0,
+        lot_step=1.0,
+        digits=2,
+        point=0.01,
+        bid=188.21,
+        ask=188.25,
+    ),
+]
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_modal_open_via_a_and_f3():
+    """Verify Asset Explorer modal opens via 'a' and 'f3' keybindings and dismisses via Escape."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = MOCK_EXPLORER_ASSETS
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+
+        # Press 'a' to open AssetExplorerModal
+        await pilot.press("a")
+        await pilot.pause()
+        assert isinstance(app.screen, AssetExplorerModal)
+
+        # Dismiss modal via Escape
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, AssetExplorerModal)
+
+        # Press 'f3' to open AssetExplorerModal
+        await pilot.press("f3")
+        await pilot.pause()
+        assert isinstance(app.screen, AssetExplorerModal)
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_modal_catalog_display_and_search():
+    """Verify Asset Explorer populates DataTable with assets and filters on search input."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+
+    async def fake_get_assets(category="stocks", search=None):
+        if search:
+            return [
+                a for a in MOCK_EXPLORER_ASSETS
+                if search.lower() in a.symbol.lower() or search.lower() in a.description.lower()
+            ]
+        return list(MOCK_EXPLORER_ASSETS)
+
+    mock_client.get_assets.side_effect = fake_get_assets
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+
+        await pilot.press("a")
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, AssetExplorerModal)
+
+        table = modal.query_one("#assets-data-table", DataTable)
+        assert table.row_count == 4
+
+        # Search for NVDA
+        search_input = modal.query_one("#asset-search-input", Input)
+        search_input.value = "NVDA"
+        await pilot.pause(0.1)
+
+        assert table.row_count == 1
+        status_bar = modal.query_one("#status-bar", Static)
+        assert "Showing 1 stocks assets matching \"NVDA\"" in str(status_bar.content)
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_modal_category_switching_and_close_button():
+    """Verify Asset Explorer switches categories and closes via button."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = MOCK_EXPLORER_ASSETS
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+
+        await pilot.press("a")
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, AssetExplorerModal)
+
+        category_select = modal.query_one("#category-select", Select)
+        category_select.value = "etfs"
+        await pilot.pause(0.1)
+
+        mock_client.get_assets.assert_called_with(category="etfs", search=None)
+
+        # Close via Button
+        modal.query_one("#btn-close", Button).press()
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, AssetExplorerModal)
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_modal_offline_fallback():
+    """Verify Asset Explorer displays error banner gracefully when gateway fails."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.side_effect = RuntimeError("Gateway timeout")
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause(0.1)
+        modal = app.screen
+        assert isinstance(modal, AssetExplorerModal)
+
+        error_banner = modal.query_one("#error-banner", Static)
+        assert "Error loading assets" in str(error_banner.content)
+        assert "visible" in error_banner.classes
+
 
 
