@@ -2059,5 +2059,253 @@ async def test_historical_data_modal_timeframe_change_and_close_button():
         assert not isinstance(app.screen, HistoricalDataModal)
 
 
+@pytest.mark.asyncio
+async def test_historical_data_modal_dismissal_via_escape():
+    """Verify pressing Escape dismisses HistoricalDataModal."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_historical_rates.return_value = HistoricalRatesResponse(
+        symbol="MSFT",
+        timeframe="D1",
+        bars=[],
+        total_bars=0,
+    )
+
+    modal = HistoricalDataModal(symbol="MSFT", api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, HistoricalDataModal)
+
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, HistoricalDataModal)
+
+
+@pytest.mark.asyncio
+async def test_historical_data_modal_error_handling_banner():
+    """Verify that when get_historical_rates raises an error, the error banner is shown and table cleared."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_historical_rates.side_effect = RuntimeError("Network timeout retrieving bars")
+
+    modal = HistoricalDataModal(symbol="MSFT", api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        error_banner = modal.query_one("#error-banner", Static)
+        assert "visible" in error_banner.classes
+        assert "Error loading rates: Network timeout" in str(error_banner.content)
+        status_bar = modal.query_one("#status-bar", Static)
+        assert "Failed to retrieve historical rates" in str(status_bar.content)
+        table = modal.query_one("#historical-data-table", DataTable)
+        assert table.row_count == 0
+
+
+@pytest.mark.asyncio
+async def test_historical_data_modal_empty_dataset_and_boundaries():
+    """Verify empty dataset displays Bars 0-0 and safely clamps on navigation."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_historical_rates.return_value = HistoricalRatesResponse(
+        symbol="MSFT",
+        timeframe="D1",
+        bars=[],
+        total_bars=0,
+    )
+
+    modal = HistoricalDataModal(symbol="MSFT", api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        footer = modal.query_one("#page-footer", Static)
+        assert "Page 1 of 1 (Bars 0-0)" in str(footer.content)
+
+        # Pressing ] on empty page clamps at end of history
+        await pilot.press("]")
+        await pilot.pause(0.1)
+        assert "[End of history]" in str(footer.content)
+
+        # Pressing [ on Page 1 is a safe no-op
+        await pilot.press("[")
+        await pilot.pause(0.1)
+        assert modal.current_offset == 0
+
+
+@pytest.mark.asyncio
+async def test_historical_data_modal_fresh_restart_failure_and_polling_error():
+    """Verify fresh restart failure notification and polling error notification handling."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_historical_rates.return_value = HistoricalRatesResponse(
+        symbol="MSFT",
+        timeframe="D1",
+        bars=[],
+        total_bars=0,
+    )
+    # Scenario A: sync_historical_rates returns status ERROR
+    mock_client.sync_historical_rates.return_value = HistoricalSyncResponse(
+        job_id="",
+        status="ERROR",
+        message="Backend gateway timeout",
+    )
+
+    modal = HistoricalDataModal(symbol="MSFT", api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        await pilot.press("f5")
+        await pilot.pause(0.1)
+
+        notifs = list(app._notifications)
+        assert any("Sync failed: Backend gateway timeout" in str(n.message) for n in notifs)
+
+        # Scenario B: sync succeeds initially but status polling returns FAILED
+        mock_client.sync_historical_rates.return_value = HistoricalSyncResponse(
+            job_id="job-fail-test",
+            status="IN_PROGRESS",
+            message="Started",
+        )
+        mock_client.get_sync_status.return_value = HistoricalSyncStatus(
+            job_id="job-fail-test",
+            status="FAILED",
+            completed_assets=0,
+            failed_assets=1,
+            total_assets=1,
+            message="Terminal disconnected during sync",
+        )
+
+        await pilot.press("f5")
+        await pilot.pause(0.1)
+
+        notifs = list(app._notifications)
+        assert any("Sync failed: Terminal disconnected during sync" in str(n.message) for n in notifs)
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_row_selected_opens_history():
+    """Verify that selecting a row in AssetExplorerModal opens HistoricalDataModal."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = [
+        AssetInfo(
+            symbol="AAPL",
+            description="Apple Inc",
+            category="Stocks/US/Nasdaq",
+            currency="USD",
+            digits=2,
+        )
+    ]
+    mock_client.get_historical_rates.return_value = HistoricalRatesResponse(
+        symbol="AAPL",
+        timeframe="D1",
+        bars=[],
+        total_bars=0,
+    )
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause(0.1)
+        modal = app.screen
+        assert isinstance(modal, AssetExplorerModal)
+
+        table = modal.query_one("#assets-data-table", DataTable)
+        table.post_message(DataTable.RowSelected(table, 0, table.get_row_at(0)))
+        await pilot.pause(0.1)
+
+        assert isinstance(app.screen, HistoricalDataModal)
+        assert app.screen.symbol == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_historical_data_modal_connected_mode_hides_simulation_badge():
+    """Verify that when connected to real terminal (mock_mode=False), simulation badge is hidden."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        mock_mode=False,
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_historical_rates.return_value = HistoricalRatesResponse(
+        symbol="MSFT",
+        timeframe="D1",
+        bars=[],
+        total_bars=0,
+    )
+
+    modal = HistoricalDataModal(symbol="MSFT", api_client=mock_client, mock_mode=False)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        badge = modal.query_one("#simulation-badge", Static)
+        assert "visible" not in badge.classes
+
+
+def test_historical_data_modal_date_formatting():
+    """Verify _format_date handles daily and intraday formats."""
+    modal = HistoricalDataModal(symbol="TEST", timeframe="D1")
+    # 2023-11-14 22:13:20 UTC = 1700000000
+    daily_str = modal._format_date(1700000000)
+    assert daily_str == "2023-11-14"
+
+    modal.current_timeframe = "H1"
+    intraday_str = modal._format_date(1700000000)
+    assert intraday_str == "2023-11-14 22:13"
+
+
 
 
