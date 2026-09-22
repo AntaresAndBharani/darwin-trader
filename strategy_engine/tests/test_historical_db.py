@@ -5,10 +5,7 @@ mt5.symbol_select, fine-grained locking with 25ms yield, delisted asset resilien
 and deterministic symbol-hash mock generator.
 """
 import os
-import sqlite3
 import pytest
-import asyncio
-from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from strategy_engine.config import StrategyConfig
@@ -299,6 +296,76 @@ class TestHistoricalDBStorage:
             busy_timeout = cursor.fetchone()[0]
             assert busy_timeout == 60000
 
+    def test_insert_rates_dicts_and_tuples(self, temp_db):
+        """Verifies insert_rates handles dictionaries and tuples seamlessly."""
+        dict_bars = [
+            {
+                "symbol": "DICTTEST",
+                "timeframe": "D1",
+                "time": 1700000000,
+                "open": 50.0,
+                "high": 52.0,
+                "low": 49.0,
+                "close": 51.5,
+                "tick_volume": 2000,
+                "spread": 1,
+            }
+        ]
+        inserted_dict = temp_db.insert_rates(dict_bars)
+        assert inserted_dict == 1
+
+        tuple_bars = [
+            ("DICTTEST", "D1", 1700086400, 51.5, 53.0, 51.0, 52.5, 2500, 1)
+        ]
+        inserted_tuple = temp_db.insert_rates(tuple_bars)
+        assert inserted_tuple == 1
+
+        assert temp_db.get_total_bars("DICTTEST") == 2
+        # Empty list is a safe no-op
+        assert temp_db.insert_rates([]) == 0
+
+    def test_get_rates_ascending_order(self, temp_db):
+        """Verifies get_rates with descending=False returns bars in ascending chronological order."""
+        bars = [
+            HistoricalBar(
+                symbol="ASCTEST",
+                timeframe="D1",
+                time=1700000000 + (i * 86400),
+                open=10.0 + i,
+                high=11.0 + i,
+                low=9.0 + i,
+                close=10.5 + i,
+            )
+            for i in range(5)
+        ]
+        temp_db.insert_rates(bars)
+        asc_bars, total = temp_db.get_rates("ASCTEST", "D1", limit=10, offset=0, descending=False)
+        assert total == 5
+        assert len(asc_bars) == 5
+        assert asc_bars[0].time == 1700000000
+        assert asc_bars[-1].time == 1700000000 + (4 * 86400)
+
+    def test_clear_rates_all_and_timeframe(self, temp_db):
+        """Verifies clear_rates clears entire database or specific timeframe."""
+        bars = [
+            HistoricalBar(symbol="S1", timeframe="D1", time=1700000000, open=1.0, high=2.0, low=0.5, close=1.5),
+            HistoricalBar(symbol="S1", timeframe="H1", time=1700000000, open=1.0, high=2.0, low=0.5, close=1.5),
+            HistoricalBar(symbol="S2", timeframe="D1", time=1700000000, open=10.0, high=20.0, low=5.0, close=15.0),
+        ]
+        temp_db.insert_rates(bars)
+
+        # Clear timeframe H1 for S1
+        deleted_tf = temp_db.clear_rates(symbol="S1", timeframe="H1")
+        assert deleted_tf == 1
+        assert temp_db.get_total_bars("S1", timeframe="H1") == 0
+        assert temp_db.get_total_bars("S1", timeframe="D1") == 1
+
+        # Clear all rates in database
+        deleted_all = temp_db.clear_rates()
+        assert deleted_all == 2
+        assert temp_db.get_total_bars("S1", timeframe="D1") == 0
+        assert temp_db.get_total_bars("S2", timeframe="D1") == 0
+
 
 class TestMT5ConnectorHistorical:
     def test_deterministic_symbol_hash_mock_generator(self, mock_connector):
@@ -406,3 +473,49 @@ class TestMT5ConnectorHistorical:
             assert len(bars) == 1
             mock_mt5.symbol_select.assert_called_once_with("TSLA", True)
             mock_mt5.copy_rates_range.assert_called_once()
+
+    def test_live_mt5_copy_rates_exception_handling(self):
+        """Verifies that an IPC exception in copy_rates_range is caught and returns None with last_error."""
+        cfg = StrategyConfig(mock_mode=False)
+        connector = MT5Connector(cfg)
+        connector.is_connected = True
+
+        mock_mt5 = MagicMock()
+        mock_mt5.symbol_select.return_value = True
+        mock_mt5.copy_rates_range.side_effect = RuntimeError("IPC connection broken")
+
+        with patch("strategy_engine.mt5_connector.HAS_MT5", True), \
+             patch("strategy_engine.mt5_connector.mt5", mock_mt5):
+            bars = connector.get_historical_rates("EXCEPTION_TEST", "D1")
+            assert bars is None
+            assert "IPC connection broken" in connector.last_error
+
+    def test_live_mt5_symbol_select_failure_unknown_symbol(self):
+        """Verifies that if symbol_select fails and symbol_info is None, returns None."""
+        cfg = StrategyConfig(mock_mode=False)
+        connector = MT5Connector(cfg)
+        connector.is_connected = True
+
+        mock_mt5 = MagicMock()
+        mock_mt5.symbol_select.return_value = False
+        mock_mt5.symbol_info.return_value = None
+
+        with patch("strategy_engine.mt5_connector.HAS_MT5", True), \
+             patch("strategy_engine.mt5_connector.mt5", mock_mt5):
+            bars = connector.get_historical_rates("UNKNOWN_SYM", "D1")
+            assert bars is None
+
+    def test_live_mt5_empty_rates_returns_none(self):
+        """Verifies that empty rates list or None from copy_rates_range returns None."""
+        cfg = StrategyConfig(mock_mode=False)
+        connector = MT5Connector(cfg)
+        connector.is_connected = True
+
+        mock_mt5 = MagicMock()
+        mock_mt5.symbol_select.return_value = True
+        mock_mt5.copy_rates_range.return_value = []
+
+        with patch("strategy_engine.mt5_connector.HAS_MT5", True), \
+             patch("strategy_engine.mt5_connector.mt5", mock_mt5):
+            bars = connector.get_historical_rates("EMPTY_SYM", "D1")
+            assert bars is None

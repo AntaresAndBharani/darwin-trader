@@ -22,7 +22,6 @@ from .models import (
     AssetCategory,
     HistoricalBar,
     HistoricalSyncStatus,
-    Timeframe,
     TIMEFRAME_TO_MT5,
 )
 
