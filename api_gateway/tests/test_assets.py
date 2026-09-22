@@ -20,6 +20,7 @@ from strategy_engine.models import (
     HistoricalSyncResponse,
     HistoricalSyncStatus,
 )
+from strategy_engine.mt5_connector import MT5Connector
 from tui.api_client import DarwinApiClient
 
 client = TestClient(app)
@@ -615,4 +616,103 @@ def test_cli_sync_history_command(tmp_path):
     # 5. No command / invalid command returns 1
     assert cli_main([]) == 1
     assert cli_main(["unknown-cmd"]) == 1
+
+
+def test_historical_routes_invalid_timeframe():
+    """
+    Verifies that passing an unsupported timeframe to historical sync or rates endpoints
+    returns HTTP 400 Bad Request with descriptive error details.
+    """
+    # 1. POST /history/sync with invalid timeframe
+    resp_sync = client.post("/api/v1/assets/history/sync?timeframe=INVALID_TF")
+    assert resp_sync.status_code == 400
+    assert "Unsupported timeframe" in resp_sync.json()["detail"]
+
+    # 2. GET /{symbol}/history with invalid timeframe
+    resp_rates = client.get("/api/v1/assets/MSFT/history?timeframe=INVALID_TF")
+    assert resp_rates.status_code == 400
+    assert "Unsupported timeframe" in resp_rates.json()["detail"]
+
+
+def test_historical_routes_pagination_validation():
+    """
+    Verifies FastAPI query parameter validation for limit and offset bounds.
+    """
+    # limit < 1
+    resp_low_limit = client.get("/api/v1/assets/MSFT/history?limit=0")
+    assert resp_low_limit.status_code == 422
+
+    # limit > 5000
+    resp_high_limit = client.get("/api/v1/assets/MSFT/history?limit=5001")
+    assert resp_high_limit.status_code == 422
+
+    # offset < 0
+    resp_neg_offset = client.get("/api/v1/assets/MSFT/history?offset=-1")
+    assert resp_neg_offset.status_code == 422
+
+
+def test_historical_sync_worker_exception_handling():
+    """
+    Verifies that an unhandled exception inside the background sync worker
+    safely transitions sync status to FAILED and reports error telemetry.
+    """
+    _reset_sync_state()
+
+    with patch.object(connector, "sync_historical_rates", side_effect=RuntimeError("Simulated DB crash")):
+        resp = client.post("/api/v1/assets/history/sync?symbol=AMZN")
+        assert resp.status_code == 202
+
+        for _ in range(30):
+            stat = client.get("/api/v1/assets/history/sync/status").json()
+            if stat["status"] == "FAILED":
+                break
+            time.sleep(0.05)
+
+        assert stat["status"] == "FAILED"
+        assert "Simulated DB crash" in stat["message"]
+
+    _reset_sync_state()
+
+
+def test_cli_timeframe_validation_and_failures(tmp_path):
+    """
+    Verifies CLI returns exit code 1 on unsupported timeframe, connector failure,
+    or delisted single symbol.
+    """
+    db_file = str(tmp_path / "cli_failures.db")
+
+    # 1. Unsupported timeframe
+    rc_tf = cli_main(["sync-history", "--symbol", "AMZN", "--timeframe", "INVALID_TF", "--db-path", db_file])
+    assert rc_tf == 1
+
+    # 2. Delisted single symbol
+    with patch.object(MT5Connector, "sync_historical_rates", return_value=(None, 0)):
+        rc_delisted = cli_main(["sync-history", "--symbol", "DELISTED_TEST", "--db-path", db_file])
+        assert rc_delisted == 1
+
+    # 3. Connector initialization failure
+    with patch.object(MT5Connector, "initialize", return_value=(False, "Failed to connect to MT5 IPC")):
+        rc_init_fail = cli_main(["sync-history", "--symbol", "AMZN", "--db-path", db_file])
+        assert rc_init_fail == 1
+
+
+@pytest.mark.asyncio
+async def test_client_sdk_error_handling_and_status_codes():
+    """
+    Verifies DarwinApiClient graceful error handling on 400 Bad Request and unexpected errors.
+    """
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as test_httpx:
+        sdk = DarwinApiClient(base_url="http://test", client=test_httpx)
+
+        # 1. sync_historical_rates with invalid timeframe (HTTP 400 -> ERROR response)
+        sync_resp = await sdk.sync_historical_rates(symbol="MSFT", timeframe="INVALID_TF")
+        assert sync_resp.status == "ERROR"
+        assert "400" in sync_resp.message or "Unsupported timeframe" in sync_resp.message
+
+        # 2. get_historical_rates with invalid timeframe (HTTP 400 -> empty rates response)
+        rates_resp = await sdk.get_historical_rates("MSFT", timeframe="INVALID_TF")
+        assert rates_resp.bars == []
+        assert rates_resp.total_bars == 0
+
 

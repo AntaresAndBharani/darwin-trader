@@ -17,6 +17,7 @@ from strategy_engine.models import (
     HistoricalRatesResponse,
     HistoricalSyncResponse,
     HistoricalSyncStatus,
+    TIMEFRAME_TO_MT5,
 )
 from .routes_strategy import connector, _state_lock
 
@@ -125,6 +126,13 @@ def trigger_historical_sync(
     """
     global _sync_status, _active_sync_thread
 
+    clean_tf = timeframe.strip().upper()
+    if clean_tf not in TIMEFRAME_TO_MT5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported timeframe '{timeframe}'. Supported timeframes: {', '.join(TIMEFRAME_TO_MT5.keys())}",
+        )
+
     with _sync_lock:
         if _sync_status.status == "IN_PROGRESS":
             return JSONResponse(
@@ -161,7 +169,7 @@ def trigger_historical_sync(
 
         _active_sync_thread = threading.Thread(
             target=_sync_worker,
-            args=(job_id, symbols, timeframe.upper(), fresh),
+            args=(job_id, symbols, clean_tf, fresh),
             daemon=True,
             name=f"HistoricalSyncWorker-{job_id[:8]}",
         )
@@ -196,6 +204,12 @@ def get_historical_rates_endpoint(
     Retrieve paginated historical OHLCV bars from local SQLite storage.
     """
     clean_tf = timeframe.strip().upper()
+    if clean_tf not in TIMEFRAME_TO_MT5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported timeframe '{timeframe}'. Supported timeframes: {', '.join(TIMEFRAME_TO_MT5.keys())}",
+        )
+
     clean_sym = symbol.strip().upper()
 
     db = HistoricalRatesDB()
