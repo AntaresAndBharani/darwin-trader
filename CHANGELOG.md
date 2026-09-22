@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **TUI Historical DataTable Inspector & Fresh Restart Modal (Issue #76)**:
+  - Created `HistoricalDataModal` in `tui/screens/historical_data_modal.py` providing interactive historical OHLCV bar inspection with self-contained `DataTable`, timeframe filtering, and 500-bar viewport pagination.
+  - Implemented keyboard bindings for dataset pagination (`]` / `PgDn` next page, `[` / `PgUp` previous page) with safe boundary handling (no-op on Page 1 underrun, `[End of history]` indicator on last page overrun) and dynamic page orientation (`Page X of Y`).
+  - Added symbol-scoped fresh restart action (`F5` and button) submitting scoped background synchronization requests (`POST /api/v1/assets/history/sync?symbol={symbol}&fresh=true`) with in-place progress banner and automatic `DataTable` reload upon completion.
+  - Implemented HTTP 409 Conflict handling toast ("Sync already in progress; please wait for completion") and disconnected/mock mode telemetry indicator (`[SIMULATION HISTORY]` badge).
+  - Integrated `HistoricalDataModal` into `AssetExplorerModal` (`tui/screens/asset_explorer_modal.py`) via `H` hotkey and "Inspect History" button.
+  - Exported `HistoricalDataModal` in `tui/screens/__init__.py`.
+  - Added comprehensive pilot and unit test suite in `tui/tests/test_tui.py` covering Gherkin BDD Scenarios 4 through 7 (modal invocation, 500-bar pagination navigation and boundary clamping, scoped fresh restart action, simulation history badge, 409 conflict toast, timeframe filtering, and modal dismissal).
+
 - **CLI Ingestion Tool & FastAPI Background Sync Router (Issue #75)**:
   - Created non-interactive CLI utility `sync-history` in `strategy_engine/cli.py` supporting `--symbol`, `--category`, `--timeframe`, and `--fresh` flags with robust error handling and execution reporting.
   - Implemented background synchronization router endpoints in `api_gateway/routes_assets.py` with strict route ordering preceding dynamic `/{symbol}`: `POST /api/v1/assets/history/sync`, `GET /api/v1/assets/history/sync/status`, and paginated read endpoint `GET /api/v1/assets/{symbol}/history`.

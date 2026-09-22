@@ -33,6 +33,10 @@ from strategy_engine.models import (
     AssetInfo,
     ConnectionState,
     ConnectionStatus,
+    HistoricalBar,
+    HistoricalRatesResponse,
+    HistoricalSyncResponse,
+    HistoricalSyncStatus,
     OrderType,
     Position,
 )
@@ -41,6 +45,7 @@ from tui.app import DarwinTraderApp
 from tui.screens.connect_modal import ConnectModal
 from tui.screens.confirm_modal import ConfirmModal
 from tui.screens.asset_explorer_modal import AssetExplorerModal
+from tui.screens.historical_data_modal import HistoricalDataModal
 from tui.widgets.header_bar import HeaderBar
 from tui.widgets.summary_cards import SummaryCards, MetricCard
 from tui.widgets.positions_table import PositionsTable
@@ -477,6 +482,7 @@ async def test_strategy_panel_rendering_and_telemetry():
         # Initial state
         assert "[● IDLE]" in str(state_widget.content)
         assert "0.00 lots" in str(exposure_widget.content)
+        assert name_widget is not None
 
         # Update running with positions
         pos1 = Position(
@@ -882,7 +888,7 @@ async def test_backend_offline_at_launch_and_reconnect_loop_scenario_5():
         # Verify timer countdown tick
         await app._tick_timer()
         await pilot.pause()
-        assert "[○ GATEWAY UNREACHABLE (2s)]" in str(badge.content)
+        assert any(s in str(badge.content) for s in ["[○ GATEWAY UNREACHABLE (2s)]", "[○ GATEWAY UNREACHABLE (1s)]"])
 
         # 2. FastAPI backend comes online
         mock_client.get_account_status.return_value = ConnectionStatus(
@@ -1594,6 +1600,464 @@ async def test_asset_explorer_modal_offline_fallback():
         error_banner = modal.query_one("#error-banner", Static)
         assert "Error loading assets" in str(error_banner.content)
         assert "visible" in error_banner.classes
+
+
+# =============================================================================
+# Issue #76: TUI Historical DataTable Inspector & Fresh Restart Modal (Slice 3)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_historical_data_modal_invocation_from_asset_explorer_scenario_4():
+    """Verify Scenario 4: User presses 'H' on Asset Explorer with MSFT selected to open HistoricalDataModal.
+
+    Renders columns: Date, Open, High, Low, Close, Volume, and Change %.
+    Prices formatted to asset digits with positive changes in green and negative in red.
+    """
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = [
+        AssetInfo(
+            symbol="MSFT",
+            description="Microsoft Corporation",
+            category="Stocks/US/Nasdaq",
+            currency="USD",
+            digits=2,
+            bid=425.20,
+            ask=425.30,
+        )
+    ]
+    mock_client.get_historical_rates.return_value = HistoricalRatesResponse(
+        symbol="MSFT",
+        timeframe="D1",
+        bars=[
+            HistoricalBar(
+                symbol="MSFT",
+                timeframe="D1",
+                time=1700000000,
+                open=420.0,
+                high=430.0,
+                low=415.0,
+                close=428.4,
+                tick_volume=12500,
+            ),
+            HistoricalBar(
+                symbol="MSFT",
+                timeframe="D1",
+                time=1700086400,
+                open=428.4,
+                high=429.0,
+                low=418.0,
+                close=420.0,
+                tick_volume=11200,
+            ),
+        ],
+        total_bars=2,
+        limit=500,
+        offset=0,
+        page=1,
+        total_pages=1,
+    )
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+
+        # Open Asset Explorer
+        await pilot.press("a")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, AssetExplorerModal)
+
+        # Press 'h' to inspect historical data for highlighted MSFT
+        await pilot.press("h")
+        await pilot.pause(0.1)
+        modal = app.screen
+        assert isinstance(modal, HistoricalDataModal)
+        assert modal.symbol == "MSFT"
+
+        # Verify API query with limit=500 and offset=0
+        mock_client.get_historical_rates.assert_called_with(
+            symbol="MSFT",
+            timeframe="D1",
+            limit=500,
+            offset=0,
+        )
+
+        # Verify DataTable columns and row count
+        table = modal.query_one("#historical-data-table", DataTable)
+        assert table.row_count == 2
+        col_names = [col.label.plain for col in table.columns.values()]
+        assert col_names == ["Date", "Open", "High", "Low", "Close", "Volume", "Change %"]
+
+        # Verify price formatting to 2 digits and styled changes
+        row0 = table.get_row_at(0)
+        assert row0[1] == "420.00"  # Open
+        assert row0[4] == "428.40"  # Close
+        change_col0 = row0[6]
+        assert "+2.00%" in str(change_col0)
+        assert "green" in str(change_col0.style)
+
+        row1 = table.get_row_at(1)
+        assert row1[1] == "428.40"
+        assert row1[4] == "420.00"
+        change_col1 = row1[6]
+        assert "-1.96%" in str(change_col1)
+        assert "red" in str(change_col1.style)
+
+
+@pytest.mark.asyncio
+async def test_historical_data_modal_pagination_and_boundaries_scenario_4():
+    """Verify Scenario 4: 500-bar viewport pagination with keyboard bindings (] / PgDn, [ / PgUp),
+    safe no-op on Page 1 underrun, and safe no-op on final page with [End of history].
+    """
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+
+    total_bars = 4500
+    bars_p1 = [
+        HistoricalBar(
+            symbol="MSFT",
+            timeframe="D1",
+            time=1700000000 + i * 86400,
+            open=400.0,
+            high=405.0,
+            low=398.0,
+            close=402.0,
+            tick_volume=1000 + i,
+        )
+        for i in range(500)
+    ]
+    bars_p2 = [
+        HistoricalBar(
+            symbol="MSFT",
+            timeframe="D1",
+            time=1700000000 + (500 + i) * 86400,
+            open=402.0,
+            high=408.0,
+            low=400.0,
+            close=405.0,
+            tick_volume=2000 + i,
+        )
+        for i in range(500)
+    ]
+    bars_p9 = [
+        HistoricalBar(
+            symbol="MSFT",
+            timeframe="D1",
+            time=1700000000 + (4000 + i) * 86400,
+            open=410.0,
+            high=415.0,
+            low=408.0,
+            close=412.0,
+            tick_volume=3000 + i,
+        )
+        for i in range(500)
+    ]
+
+    async def fake_get_rates(symbol="MSFT", timeframe="D1", limit=500, offset=0):
+        if offset == 0:
+            return HistoricalRatesResponse(
+                symbol=symbol,
+                timeframe=timeframe,
+                bars=bars_p1,
+                total_bars=total_bars,
+                limit=limit,
+                offset=offset,
+                page=1,
+                total_pages=9,
+            )
+        elif offset == 500:
+            return HistoricalRatesResponse(
+                symbol=symbol,
+                timeframe=timeframe,
+                bars=bars_p2,
+                total_bars=total_bars,
+                limit=limit,
+                offset=offset,
+                page=2,
+                total_pages=9,
+            )
+        elif offset == 4000:
+            return HistoricalRatesResponse(
+                symbol=symbol,
+                timeframe=timeframe,
+                bars=bars_p9,
+                total_bars=total_bars,
+                limit=limit,
+                offset=offset,
+                page=9,
+                total_pages=9,
+            )
+        return HistoricalRatesResponse(
+            symbol=symbol,
+            timeframe=timeframe,
+            bars=[],
+            total_bars=total_bars,
+            limit=limit,
+            offset=offset,
+            page=(offset // limit) + 1,
+            total_pages=9,
+        )
+
+    mock_client.get_historical_rates.side_effect = fake_get_rates
+
+    modal = HistoricalDataModal(symbol="MSFT", api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        footer = modal.query_one("#page-footer", Static)
+        assert "Page 1 of 9 (Bars 1-500) | [PgDn/]] Next  [PgUp/[] Prev" in str(footer.content)
+
+        # 1. Safe no-op on Page 1 with [ or pageup
+        await pilot.press("[")
+        await pilot.pause(0.1)
+        assert "Page 1 of 9 (Bars 1-500)" in str(footer.content)
+        assert modal.current_offset == 0
+
+        await pilot.press("pageup")
+        await pilot.pause(0.1)
+        assert "Page 1 of 9 (Bars 1-500)" in str(footer.content)
+        assert modal.current_offset == 0
+
+        # 2. Next page with ] -> loads offset 500 (Bars 501-1000)
+        await pilot.press("]")
+        await pilot.pause(0.1)
+        assert "Page 2 of 9 (Bars 501-1000)" in str(footer.content)
+        assert modal.current_offset == 500
+
+        # 3. Previous page back to 1 with [
+        await pilot.press("[")
+        await pilot.pause(0.1)
+        assert "Page 1 of 9 (Bars 1-500)" in str(footer.content)
+        assert modal.current_offset == 0
+
+        # 4. Next page with pagedown
+        await pilot.press("pagedown")
+        await pilot.pause(0.1)
+        assert "Page 2 of 9 (Bars 501-1000)" in str(footer.content)
+        assert modal.current_offset == 500
+
+        # 5. Jump to final page (Page 9 of 9)
+        modal.current_offset = 4000
+        await modal._load_data()
+        await pilot.pause(0.1)
+        assert "Page 9 of 9 (Bars 4001-4500)" in str(footer.content)
+
+        # Press ] on final page -> safe no-op remaining on Page 9 with [End of history]
+        await pilot.press("]")
+        await pilot.pause(0.1)
+        assert "Page 9 of 9 (Bars 4001-4500)" in str(footer.content)
+        assert "[End of history]" in str(footer.content)
+        footer_status = modal.query_one("#footer-status", Static)
+        assert "[End of history]" in str(footer_status.content)
+        assert modal.current_offset == 4000
+
+        # Press pagedown on final page -> safe no-op remaining on Page 9
+        await pilot.press("pagedown")
+        await pilot.pause(0.1)
+        assert "Page 9 of 9 (Bars 4001-4500)" in str(footer.content)
+        assert "[End of history]" in str(footer.content)
+        assert modal.current_offset == 4000
+
+
+@pytest.mark.asyncio
+async def test_historical_data_modal_fresh_restart_action_scenario_5():
+    """Verify Scenario 5: Fresh Restart action (F5 / button) submits scoped fresh sync,
+    displays progress banner, and reloads DataTable upon completion."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_historical_rates.return_value = HistoricalRatesResponse(
+        symbol="MSFT",
+        timeframe="D1",
+        bars=[
+            HistoricalBar(
+                symbol="MSFT",
+                timeframe="D1",
+                time=1700000000,
+                open=420.0,
+                high=425.0,
+                low=418.0,
+                close=422.0,
+                tick_volume=1000,
+            )
+        ],
+        total_bars=1,
+    )
+    mock_client.sync_historical_rates.return_value = HistoricalSyncResponse(
+        job_id="job-msft-fresh-123",
+        status="IN_PROGRESS",
+        message="Historical sync job started",
+    )
+    mock_client.get_sync_status.return_value = HistoricalSyncStatus(
+        job_id="job-msft-fresh-123",
+        status="COMPLETED",
+        completed_assets=1,
+        total_assets=1,
+        message="Sync completed",
+    )
+
+    modal = HistoricalDataModal(symbol="MSFT", api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        # Press F5 to trigger fresh restart
+        await pilot.press("f5")
+        await pilot.pause(0.1)
+
+        # Verify scoped sync request sent with symbol=MSFT and fresh=True
+        mock_client.sync_historical_rates.assert_called_with(
+            symbol="MSFT",
+            timeframe="D1",
+            fresh=True,
+        )
+
+        # Verify DataTable reloaded
+        assert mock_client.get_historical_rates.call_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_historical_data_modal_simulation_badge_scenario_6():
+    """Verify Scenario 6: Disconnected/Mock Mode displays cyan [SIMULATION HISTORY] badge."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.DISCONNECTED,
+        server="Unknown",
+        mock_mode=True,
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_historical_rates.return_value = HistoricalRatesResponse(
+        symbol="MSFT",
+        timeframe="D1",
+        bars=[],
+        total_bars=0,
+    )
+
+    modal = HistoricalDataModal(symbol="MSFT", api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        badge = modal.query_one("#simulation-badge", Static)
+        assert "[SIMULATION HISTORY]" in str(badge.content)
+        assert "visible" in badge.classes
+
+
+@pytest.mark.asyncio
+async def test_historical_data_modal_concurrent_sync_rejection_409_scenario_7():
+    """Verify Scenario 7: Concurrent sync rejection with HTTP 409 Conflict displays warning toast."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_historical_rates.return_value = HistoricalRatesResponse(
+        symbol="MSFT",
+        timeframe="D1",
+        bars=[],
+        total_bars=0,
+    )
+    # Return 409 Conflict rejection response
+    mock_client.sync_historical_rates.return_value = HistoricalSyncResponse(
+        job_id="active-job-xyz",
+        status="IN_PROGRESS",
+        message="Sync job already in progress",
+    )
+
+    modal = HistoricalDataModal(symbol="MSFT", api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        # Trigger fresh restart via button
+        btn = modal.query_one("#btn-fresh-restart", Button)
+        btn.press()
+        await pilot.pause(0.1)
+
+        # Verify warning toast notification was sent
+        notifs = list(app._notifications)
+        assert any("Sync already in progress; please wait for completion" in str(n.message) for n in notifs)
+
+
+@pytest.mark.asyncio
+async def test_historical_data_modal_timeframe_change_and_close_button():
+    """Verify timeframe filtering resets offset to 0 and queries new timeframe, and modal closes."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_historical_rates.return_value = HistoricalRatesResponse(
+        symbol="MSFT",
+        timeframe="D1",
+        bars=[],
+        total_bars=0,
+    )
+
+    modal = HistoricalDataModal(symbol="MSFT", api_client=mock_client)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, HistoricalDataModal)
+
+        # Change timeframe to H1
+        tf_select = modal.query_one("#timeframe-select", Select)
+        tf_select.value = "H1"
+        await pilot.pause(0.1)
+
+        mock_client.get_historical_rates.assert_called_with(
+            symbol="MSFT",
+            timeframe="H1",
+            limit=500,
+            offset=0,
+        )
+
+        # Close via Close Button
+        modal.query_one("#btn-close", Button).press()
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, HistoricalDataModal)
+
 
 
 

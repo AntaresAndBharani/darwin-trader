@@ -101,6 +101,11 @@ class AssetExplorerModal(ModalScreen[None]):
         text-style: dim;
     }
 
+    #btn-inspect-history {
+        min-width: 16;
+        margin-right: 1;
+    }
+
     #btn-close {
         min-width: 12;
     }
@@ -108,6 +113,8 @@ class AssetExplorerModal(ModalScreen[None]):
 
     BINDINGS = [
         Binding("escape", "dismiss_modal", "Close", show=True),
+        Binding("h", "inspect_history", "Inspect History", show=True),
+        Binding("H", "inspect_history", "Inspect History", show=False),
         Binding("s", "focus_search", "Search", show=False),
     ]
 
@@ -141,9 +148,10 @@ class AssetExplorerModal(ModalScreen[None]):
             yield DataTable(id="assets-data-table", cursor_type="row")
             with Horizontal(classes="modal-footer"):
                 yield Static(
-                    "[↑/↓] Navigate  |  [S] Focus Search  |  [ESC] Close",
+                    "[↑/↓] Navigate  |  [H] Inspect History  |  [S] Focus Search  |  [ESC] Close",
                     classes="help-hint",
                 )
+                yield Button("Inspect History", id="btn-inspect-history", variant="primary")
                 yield Button("Close", id="btn-close", variant="default")
 
     async def on_mount(self) -> None:
@@ -224,3 +232,41 @@ class AssetExplorerModal(ModalScreen[None]):
 
     def action_focus_search(self) -> None:
         self.query_one("#asset-search-input", Input).focus()
+
+    def _get_selected_asset(self) -> Optional[AssetInfo]:
+        """Returns the currently highlighted or selected AssetInfo."""
+        table = self.query_one("#assets-data-table", DataTable)
+        if table.row_count == 0 or not self._current_assets:
+            return None
+        try:
+            cell_key = table.coordinate_to_cell_key(table.cursor_coordinate)
+            if cell_key and cell_key.row_key and cell_key.row_key.value:
+                sym = str(cell_key.row_key.value)
+                for asset in self._current_assets:
+                    if asset.symbol == sym:
+                        return asset
+                return AssetInfo(symbol=sym)
+        except Exception:
+            pass
+        if 0 <= table.cursor_row < len(self._current_assets):
+            return self._current_assets[table.cursor_row]
+        return self._current_assets[0]
+
+    def action_inspect_history(self) -> None:
+        """Opens HistoricalDataModal for the highlighted asset."""
+        asset = self._get_selected_asset()
+        if not asset:
+            return
+        from tui.screens.historical_data_modal import HistoricalDataModal
+        self.app.push_screen(
+            HistoricalDataModal(
+                symbol=asset.symbol,
+                digits=asset.digits,
+                api_client=self.api_client,
+            )
+        )
+
+    @on(Button.Pressed, "#btn-inspect-history")
+    def on_inspect_history_pressed(self) -> None:
+        self.action_inspect_history()
+
