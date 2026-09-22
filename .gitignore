@@ -47,3 +47,8 @@ dist/
 unit-test-summary.md
 logs/local-pipeline/
 .graph/
+
+# SQLite & Historical Data
+data/
+*.db*
+

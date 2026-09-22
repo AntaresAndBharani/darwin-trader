@@ -1,11 +1,14 @@
 """
 MetaTrader 5 Connector Module with Live MT5 API and Mock MT5 execution engine for platform independence.
 """
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union, Any
 from datetime import datetime
 import platform
 import threading
 import time
+import hashlib
+import random
+import asyncio
 
 from .config import StrategyConfig
 from .models import (
@@ -17,6 +20,10 @@ from .models import (
     ConnectionStatus,
     AssetInfo,
     AssetCategory,
+    HistoricalBar,
+    HistoricalSyncStatus,
+    Timeframe,
+    TIMEFRAME_TO_MT5,
 )
 
 # Try importing MetaTrader5 (available on Windows platform)
@@ -562,4 +569,196 @@ class MT5Connector:
                 bid=bid,
                 ask=ask,
             )
+
+    def _generate_mock_historical_bars(
+        self,
+        symbol: str,
+        timeframe: str = "D1",
+        date_from: Optional[Union[datetime, int]] = None,
+        date_to: Optional[Union[datetime, int]] = None,
+    ) -> Optional[List[HistoricalBar]]:
+        """
+        Generates 100 synthetic historical OHLCV bars deterministically seeded
+        by the symbol string MD5 hash. Simulates delisted/invalid symbols by returning None.
+        """
+        clean_sym = symbol.strip().upper()
+        if clean_sym in ("DELISTED", "INVALID", "FAIL", "NULL") or clean_sym.endswith(".DELISTED"):
+            return None
+
+        # Deterministic seed from MD5 hash of uppercase symbol string
+        seed = int(hashlib.md5(clean_sym.encode("utf-8")).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+
+        # Standard base epoch timestamp (1700000000 = 2023-11-14 22:13:20 UTC)
+        # Guarantees identical timestamps across symbols for multi-symbol collision tests
+        base_time = 1700000000
+        price = round(rng.uniform(50.0, 500.0), 2)
+
+        bars = []
+        for i in range(100):
+            ts = base_time + (i * 86400)
+            change = rng.uniform(-0.02, 0.02) * price
+            close_p = round(max(1.0, price + change), 2)
+            open_p = round(price, 2)
+            high_p = round(max(open_p, close_p) + rng.uniform(0.1, 2.0), 2)
+            low_p = round(max(0.5, min(open_p, close_p) - rng.uniform(0.1, 2.0)), 2)
+            vol = rng.randint(1000, 100000)
+            spread = rng.randint(1, 5)
+            price = close_p
+            bars.append(HistoricalBar(
+                symbol=clean_sym,
+                timeframe=timeframe,
+                time=ts,
+                open=open_p,
+                high=high_p,
+                low=low_p,
+                close=close_p,
+                tick_volume=vol,
+                spread=spread,
+            ))
+
+        d_from_ts = int(date_from.timestamp()) if isinstance(date_from, datetime) else date_from
+        d_to_ts = int(date_to.timestamp()) if isinstance(date_to, datetime) else date_to
+
+        if d_from_ts is not None:
+            bars = [b for b in bars if b.time >= d_from_ts]
+        if d_to_ts is not None:
+            bars = [b for b in bars if b.time <= d_to_ts]
+
+        return bars
+
+    def get_historical_rates(
+        self,
+        symbol: str,
+        timeframe: str = "D1",
+        date_from: Optional[Union[datetime, int]] = None,
+        date_to: Optional[Union[datetime, int]] = None,
+    ) -> Optional[List[HistoricalBar]]:
+        """
+        Fetches historical OHLCV bars for a given symbol and timeframe.
+        Ensures symbol is active in Market Watch via mt5.symbol_select(symbol, True).
+        Acquires self._lock strictly around MT5 Win32 IPC calls.
+        Returns None for invalid/delisted symbols or upon fetch failures.
+        """
+        if self.config.mock_mode or not HAS_MT5 or not self.is_connected:
+            return self._generate_mock_historical_bars(symbol, timeframe, date_from, date_to)
+
+        tf_const = TIMEFRAME_TO_MT5.get(timeframe.upper(), 16408)
+        d_from = (
+            date_from
+            if isinstance(date_from, datetime)
+            else (datetime.utcfromtimestamp(date_from) if date_from else datetime(1990, 1, 1))
+        )
+        d_to = (
+            date_to
+            if isinstance(date_to, datetime)
+            else (datetime.utcfromtimestamp(date_to) if date_to else datetime.utcnow())
+        )
+
+        with self._lock:
+            try:
+                selected = mt5.symbol_select(symbol, True)
+                if not selected:
+                    s_info = mt5.symbol_info(symbol)
+                    if s_info is None:
+                        return None
+                rates_data = mt5.copy_rates_range(symbol, tf_const, d_from, d_to)
+            except Exception as e:
+                self.last_error = f"Error fetching rates for {symbol}: {e}"
+                return None
+
+        if rates_data is None or len(rates_data) == 0:
+            return None
+
+        bars = []
+        for r in rates_data:
+            bars.append(HistoricalBar(
+                symbol=symbol,
+                timeframe=timeframe,
+                time=int(r["time"]),
+                open=float(r["open"]),
+                high=float(r["high"]),
+                low=float(r["low"]),
+                close=float(r["close"]),
+                tick_volume=int(r["tick_volume"]),
+                spread=int(r["spread"]),
+            ))
+        return bars
+
+    def sync_historical_rates(
+        self,
+        symbol: str,
+        timeframe: str = "D1",
+        fresh: bool = False,
+        db: Optional[Any] = None,
+    ) -> Tuple[Optional[List[HistoricalBar]], int]:
+        """
+        Synchronizes historical rates for a single asset into the SQLite storage layer.
+        If fresh=True, clears existing cached bars for symbol and pulls complete history.
+        Otherwise queries MAX(time) and performs incremental upsert starting from MAX(time) inclusive.
+        Returns (bars, inserted_count), or (None, 0) if asset failed / delisted.
+        """
+        if db is None:
+            from .historical_db import HistoricalRatesDB
+            db = HistoricalRatesDB()
+
+        if fresh:
+            db.clear_rates(symbol=symbol, timeframe=timeframe)
+            date_from = datetime(1990, 1, 1)
+        else:
+            max_time = db.get_latest_timestamp(symbol=symbol, timeframe=timeframe)
+            if max_time is not None:
+                date_from = max_time
+            else:
+                date_from = datetime(1990, 1, 1)
+
+        bars = self.get_historical_rates(symbol, timeframe, date_from=date_from)
+        if bars is None:
+            return None, 0
+
+        if not bars:
+            return [], 0
+
+        inserted_count = db.insert_rates(bars)
+        return bars, inserted_count
+
+    async def sync_historical_batch(
+        self,
+        symbols: List[str],
+        timeframe: str = "D1",
+        fresh: bool = False,
+        db: Optional[Any] = None,
+        yield_ms: float = 0.025,
+    ) -> HistoricalSyncStatus:
+        """
+        Asynchronously synchronizes historical rates for a batch of symbols.
+        Releases connector lock between symbols, records failed_assets for delisted
+        instruments, and yields for yield_ms (default 25ms) to prevent gateway starvation.
+        """
+        if db is None:
+            from .historical_db import HistoricalRatesDB
+            db = HistoricalRatesDB()
+
+        status = HistoricalSyncStatus(
+            status="IN_PROGRESS",
+            total_assets=len(symbols),
+        )
+
+        for sym in symbols:
+            status.current_symbol = sym
+            bars, count = self.sync_historical_rates(
+                symbol=sym, timeframe=timeframe, fresh=fresh, db=db
+            )
+            if bars is None:
+                status.failed_assets += 1
+            else:
+                status.completed_assets += 1
+
+            if yield_ms > 0:
+                await asyncio.sleep(yield_ms)
+
+        status.status = "COMPLETED"
+        status.current_symbol = None
+        return status
+
 

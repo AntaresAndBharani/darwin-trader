@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **SQLite Storage Layer, Models, .gitignore & MT5 Historical Connector (Issue #74)**:
+  - Created `HistoricalRatesDB` in `strategy_engine/historical_db.py` operating in SQLite WAL mode with 60-second busy timeout (`PRAGMA busy_timeout = 60000;`), automatic `data/` directory initialization, and composite primary key `(symbol, timeframe, time DESC) WITHOUT ROWID` guaranteeing clustered range seek performance.
+  - Implemented `INSERT OR REPLACE` upsert semantics to cleanly update forming daily bars with finalized OHLCV data on subsequent synchronizations without duplicate row creation or key collisions.
+  - Added indexed pagination `get_rates(symbol, timeframe, limit=500, offset=0)` returning `(bars, total_bars)` with safe boundary handling for underrun and overrun requests.
+  - Added Pydantic data models in `strategy_engine/models.py`: `Timeframe` enum, `TIMEFRAME_TO_MT5` mapping dictionary, `HistoricalBar`, `HistoricalRatesRequest`, `HistoricalRatesResponse`, `HistoricalSyncStatus`, and `HistoricalSyncResponse`.
+  - Added historical rate extraction methods in `strategy_engine/mt5_connector.py`: `get_historical_rates()` with `mt5.symbol_select(symbol, True)`, decoupled fine-grained Win32 IPC locking, non-fatal skip on `None` for delisted assets incrementing `failed_assets`, `sync_historical_rates()`, and async batch synchronization `sync_historical_batch()` with 25ms yield (`asyncio.sleep(0.025)`).
+  - Implemented deterministic pseudo-random historical bar mock generator seeded by symbol MD5 hash for headless CI reliability.
+  - Excluded `data/` and `*.db*` in `.gitignore` to prevent accidental database commits.
+  - Added comprehensive test suite in `strategy_engine/tests/test_historical_db.py` validating composite PK collision safety, forming candle upsert, pagination, WAL pragmas, mock determinism, delisted symbol handling, and Market Watch symbol selection.
+
 ### Fixed
 - **Multi-Symbol & Discretionary Positions Retrieval in MT5Connector**:
   - Broadened `MT5Connector.get_open_positions(symbol=None)` in `strategy_engine/mt5_connector.py` to retrieve all open positions across all traded symbols and asset classes (stocks, forex, indices) when `symbol` is omitted.
