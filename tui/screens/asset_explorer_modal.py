@@ -270,3 +270,7 @@ class AssetExplorerModal(ModalScreen[None]):
     def on_inspect_history_pressed(self) -> None:
         self.action_inspect_history()
 
+    @on(DataTable.RowSelected, "#assets-data-table")
+    def on_row_selected(self, event: DataTable.RowSelected) -> None:
+        self.action_inspect_history()
+

@@ -244,17 +244,20 @@ class HistoricalDataModal(ModalScreen[None]):
 
     async def _check_simulation_mode(self) -> None:
         """Determines if simulation history badge should be shown."""
+        badge = self.query_one("#simulation-badge", Static)
         if self._mock_mode:
-            self.query_one("#simulation-badge", Static).add_class("visible")
+            badge.add_class("visible")
             return
         try:
             status = await self.api_client.get_account_status()
             if status.mock_mode or status.status != ConnectionState.CONNECTED:
                 self._mock_mode = True
-                self.query_one("#simulation-badge", Static).add_class("visible")
+                badge.add_class("visible")
+            else:
+                badge.remove_class("visible")
         except Exception:
             self._mock_mode = True
-            self.query_one("#simulation-badge", Static).add_class("visible")
+            badge.add_class("visible")
 
     def _format_date(self, timestamp: int) -> str:
         """Formats UNIX epoch timestamp to human readable date/time string."""
@@ -271,9 +274,9 @@ class HistoricalDataModal(ModalScreen[None]):
         page_footer = self.query_one("#page-footer", Static)
         footer_status = self.query_one("#footer-status", Static)
 
-        if self.total_bars <= 0:
-            self.total_pages = 1
-            self.page = 1
+        if self.total_bars <= 0 or not self.current_bars:
+            self.total_pages = max(1, (self.total_bars + self.limit - 1) // self.limit) if self.total_bars > 0 else 1
+            self.page = max(1, min(self.total_pages, (self.current_offset // self.limit) + 1))
             start_bar = 0
             end_bar = 0
         else:
@@ -345,6 +348,9 @@ class HistoricalDataModal(ModalScreen[None]):
             self._update_footer()
             status_bar.update(f"Displaying {len(self.current_bars)} bars for {self.symbol} ({self.current_timeframe})")
         except Exception as exc:
+            self.current_bars = []
+            table.clear()
+            self._update_footer()
             error_banner.update(f"Error loading rates: {exc}")
             error_banner.add_class("visible")
             status_bar.update("Failed to retrieve historical rates")
@@ -371,6 +377,10 @@ class HistoricalDataModal(ModalScreen[None]):
 
     async def action_fresh_restart(self) -> None:
         """Submits scoped fresh sync request (F5) and updates progress banner."""
+        if getattr(self, "_is_syncing", False):
+            return
+        self._is_syncing = True
+
         banner = self.query_one("#progress-banner", Static)
         banner.update(f"Refreshing {self.symbol} historical data...")
         banner.add_class("visible")
@@ -393,17 +403,28 @@ class HistoricalDataModal(ModalScreen[None]):
                 return
 
             if resp.status == "ERROR":
-                self.notify(f"Sync failed: {resp.message}", severity="error")
+                if "already in progress" in (resp.message or "").lower() or "409" in (resp.message or ""):
+                    self.notify("Sync already in progress; please wait for completion", severity="warning")
+                else:
+                    self.notify(f"Sync failed: {resp.message}", severity="error")
                 banner.remove_class("visible")
                 banner.update("")
                 return
 
             # Poll status until finished or max 1.5 seconds
+            sync_failed = False
+            fail_msg = ""
             for _ in range(30):
                 status = await self.api_client.get_sync_status()
                 if status.status in ("COMPLETED", "FAILED", "IDLE"):
+                    if status.status == "FAILED":
+                        sync_failed = True
+                        fail_msg = status.message or "Sync failed"
                     break
                 await asyncio.sleep(0.05)
+
+            if sync_failed:
+                self.notify(f"Sync failed: {fail_msg}", severity="error")
 
             self.current_offset = 0
             self._at_end_of_history = False
@@ -414,6 +435,7 @@ class HistoricalDataModal(ModalScreen[None]):
             else:
                 self.notify(f"Sync error: {exc}", severity="error")
         finally:
+            self._is_syncing = False
             banner.remove_class("visible")
             banner.update("")
 
