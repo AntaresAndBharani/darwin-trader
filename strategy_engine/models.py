@@ -2,7 +2,7 @@
 Data models for signals, candles, positions, and strategy engine state.
 """
 from enum import Enum
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -147,4 +147,76 @@ class AssetInfo(BaseModel):
     trade_mode: int = 4
     bid: Optional[float] = None
     ask: Optional[float] = None
+
+
+class Timeframe(str, Enum):
+    M1 = "M1"
+    M5 = "M5"
+    M15 = "M15"
+    M30 = "M30"
+    H1 = "H1"
+    H4 = "H4"
+    D1 = "D1"
+    W1 = "W1"
+    MN1 = "MN1"
+
+
+TIMEFRAME_TO_MT5: Dict[str, int] = {
+    "M1": 1,
+    "M5": 5,
+    "M15": 15,
+    "M30": 30,
+    "H1": 16385,
+    "H4": 16388,
+    "D1": 16408,
+    "W1": 32769,
+    "MN1": 49153,
+}
+
+
+class HistoricalBar(BaseModel):
+    symbol: str
+    timeframe: str = "D1"
+    time: int  # UNIX epoch timestamp (seconds)
+    open: float
+    high: float
+    low: float
+    close: float
+    tick_volume: int = 0
+    spread: int = 0
+
+
+class HistoricalRatesRequest(BaseModel):
+    symbol: str
+    timeframe: str = "D1"
+    limit: int = 500
+    offset: int = 0
+
+
+class HistoricalRatesResponse(BaseModel):
+    symbol: str
+    timeframe: str = "D1"
+    bars: List[HistoricalBar] = []
+    total_bars: int = 0
+    limit: int = 500
+    offset: int = 0
+    page: int = 1
+    total_pages: int = 1
+
+
+class HistoricalSyncStatus(BaseModel):
+    job_id: Optional[str] = None
+    status: str = "IDLE"  # "IDLE", "IN_PROGRESS", "COMPLETED", "FAILED"
+    completed_assets: int = 0
+    failed_assets: int = 0
+    total_assets: int = 0
+    current_symbol: Optional[str] = None
+    message: str = ""
+
+
+class HistoricalSyncResponse(BaseModel):
+    job_id: str
+    status: str = "IN_PROGRESS"
+    message: str = ""
+
 
