@@ -220,3 +220,86 @@ class HistoricalSyncResponse(BaseModel):
     message: str = ""
 
 
+class HistoricalDataNotFoundError(Exception):
+    """Raised when no historical rates are found in local storage for a symbol."""
+    pass
+
+
+class TradeAction(str, Enum):
+    ENTER = "ENTER"
+    WAIT = "WAIT"
+    EXIT = "EXIT"
+    SCALE_OUT = "SCALE_OUT"
+    PASS = "PASS"
+
+
+class MarketRegime(str, Enum):
+    STAGE_1_ACCUMULATION = "STAGE_1_ACCUMULATION"
+    STAGE_2_MARKUP = "STAGE_2_MARKUP"
+    STAGE_3_DISTRIBUTION = "STAGE_3_DISTRIBUTION"
+    STAGE_4_DECLINE = "STAGE_4_DECLINE"
+    CHOPPY = "CHOPPY"
+
+
+class CommitteeVerdict(BaseModel):
+    symbol: str
+    action: TradeAction
+    direction: Optional[str] = None  # "LONG", "SHORT", "NEUTRAL"
+    regime: Optional[MarketRegime] = None
+    consensus_score: Optional[str] = None
+    data_health: Optional[str] = None
+    entry_zone: Optional[str] = None
+    entry_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit_1: Optional[float] = None
+    take_profit_2: Optional[float] = None
+    risk_reward_ratio: Optional[float] = None
+    reason: Optional[str] = ""
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    def to_trade_signal(self) -> TradeSignal:
+        """Converts committee verdict into an executable TradeSignal."""
+        if self.action == TradeAction.ENTER:
+            sig_type = SignalType.ENTER_LONG if (self.direction or "").upper() == "LONG" else SignalType.ENTER_SHORT
+        elif self.action in (TradeAction.EXIT, TradeAction.SCALE_OUT):
+            sig_type = SignalType.EXIT_LONG if (self.direction or "").upper() == "LONG" else SignalType.EXIT_SHORT
+        else:
+            sig_type = SignalType.HOLD
+
+        return TradeSignal(
+            symbol=self.symbol,
+            signal_type=sig_type,
+            price=self.entry_price or 0.0,
+            stop_loss=self.stop_loss,
+            take_profit=self.take_profit_1,
+            reason=self.reason or f"Committee verdict: {self.action.value} {self.direction or ''}".strip(),
+            timestamp=self.timestamp,
+        )
+
+
+class CommitteeContext(BaseModel):
+    symbol: str
+    current_price: float
+    as_of_time: int
+    d1_bars_count: int
+    h1_bars_count: int = 0
+    ema_20: Optional[float] = None
+    ema_50: Optional[float] = None
+    ema_200: Optional[float] = None
+    rsi_14: Optional[float] = None
+    atr_14: Optional[float] = None
+    swing_highs: List[float] = Field(default_factory=list)
+    swing_lows: List[float] = Field(default_factory=list)
+    swing_ceiling: Optional[float] = None
+    swing_floor: Optional[float] = None
+    fibonacci_grid: Dict[str, float] = Field(default_factory=dict)
+    vpoc: Optional[float] = None
+    hvn: List[float] = Field(default_factory=list)
+    lvn: List[float] = Field(default_factory=list)
+    benchmark_symbol: str = "SPY"
+    benchmark_beta: Optional[float] = None
+    relative_strength: Optional[float] = None
+    data_flags: List[str] = Field(default_factory=list)
+
+
+

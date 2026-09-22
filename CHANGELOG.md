@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Deterministic Technical Calculator & Domain Models (Issue #84)**:
+  - Added Pydantic schemas in `strategy_engine/models.py`: `TradeAction` enum (`ENTER`, `WAIT`, `EXIT`, `SCALE_OUT`, `PASS`), `MarketRegime` enum (`STAGE_1_ACCUMULATION`, `STAGE_2_MARKUP`, `STAGE_3_DISTRIBUTION`, `STAGE_4_DECLINE`, `CHOPPY`), `CommitteeVerdict` (with optional non-actionable fields and `to_trade_signal()` helper), `CommitteeContext`, and fail-closed `HistoricalDataNotFoundError`.
+  - Implemented pure deterministic technical calculator in `strategy_engine/committee_calculator.py` with zero network and MT5 imports.
+  - Added recency fetch logic querying `get_rates(limit=250, descending=True)` with reverse sorting (`list(reversed(raw_bars))`) to guarantee chronological ascending order (`time ASC`) ending at the absolute latest bar recorded in SQLite.
+  - Implemented rolling EMAs (20, 50, 200) with short-history fallback (`ema_200 = None`) and `[REGIME: SHORT_HISTORY_DEGRADED]` data flag for assets with $< 200$ bars.
+  - Implemented Wilder's RSI(14) and ATR(14) calculations.
+  - Added swing pivot detection with parameterized rolling extrema ($k=5$ bars left/right) and swing ceiling/floor identification.
+  - Implemented 60-bar lookback dominant Fibonacci anchor grid with retracements (0.236..0.786) and extensions (1.272, 1.618).
+  - Added vectorized 50-bin Typical Price `(H+L+C)/3` Volume Profile weighted by `tick_volume` on H1 bars (VPOC, HVN, LVN) with zero-volume fallback.
+  - Implemented SPY benchmark beta calculation via daily timestamp inner-join with $< 20$ overlap guard (`[BENCHMARK: INSUFFICIENT_OVERLAP]`), uncached benchmark detection (`[BENCHMARK: UNCACHED (STANDALONE REGIME)]`), and data staleness detection (`[DATA_STALE]` for bars older than 5 trading days).
+  - Added comprehensive test suite in `strategy_engine/tests/test_committee_calculator.py` covering Gherkin BDD Scenarios 1, 6, 7, 8, indicator helpers, and domain models.
+
 - **TUI Historical DataTable Inspector & Fresh Restart Modal (Issue #82, #76)**:
   - Created `HistoricalDataModal` in `tui/screens/historical_data_modal.py` providing interactive historical OHLCV bar inspection with self-contained `DataTable`, timeframe filtering, and 500-bar viewport pagination.
   - Implemented keyboard bindings for dataset pagination (`]` / `PgDn` next page, `[` / `PgUp` previous page) with safe boundary handling (no-op on Page 1 underrun, `[End of history]` indicator on last page overrun) and dynamic page orientation (`Page X of Y`).
