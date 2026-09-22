@@ -9,6 +9,7 @@ from typing import List, Optional
 
 from strategy_engine.config import StrategyConfig
 from strategy_engine.historical_db import HistoricalRatesDB
+from strategy_engine.models import TIMEFRAME_TO_MT5
 from strategy_engine.mt5_connector import MT5Connector
 
 
@@ -17,9 +18,16 @@ def handle_sync_history(args: argparse.Namespace) -> int:
     db = HistoricalRatesDB(db_path=args.db_path) if getattr(args, "db_path", None) else HistoricalRatesDB()
     config = StrategyConfig(mock_mode=True)
     connector = MT5Connector(config)
-    connector.initialize()
+    ok, err = connector.initialize()
+    if not ok:
+        print(f"Error: Connector initialization failed: {err}")
+        return 1
 
     timeframe = (getattr(args, "timeframe", None) or "D1").upper()
+    if timeframe not in TIMEFRAME_TO_MT5:
+        print(f"Error: Unsupported timeframe '{timeframe}'. Supported: {', '.join(TIMEFRAME_TO_MT5.keys())}")
+        return 1
+
     fresh = bool(getattr(args, "fresh", False))
     symbol = getattr(args, "symbol", None)
     category = getattr(args, "category", None)

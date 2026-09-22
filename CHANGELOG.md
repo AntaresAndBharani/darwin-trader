@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Exported `HistoricalDataModal` in `tui/screens/__init__.py`.
   - Added comprehensive pilot and unit test suite in `tui/tests/test_tui.py` covering Gherkin BDD Scenarios 4 through 7 (modal invocation, 500-bar pagination navigation and boundary clamping, scoped fresh restart action, simulation history badge, 409 conflict toast, timeframe filtering, and modal dismissal).
 
-- **CLI Ingestion Tool & FastAPI Background Sync Router (Issue #75)**:
+- **CLI Ingestion Tool & FastAPI Background Sync Router (Issue #81, #75)**:
   - Created non-interactive CLI utility `sync-history` in `strategy_engine/cli.py` supporting `--symbol`, `--category`, `--timeframe`, and `--fresh` flags with robust error handling and execution reporting.
   - Implemented background synchronization router endpoints in `api_gateway/routes_assets.py` with strict route ordering preceding dynamic `/{symbol}`: `POST /api/v1/assets/history/sync`, `GET /api/v1/assets/history/sync/status`, and paginated read endpoint `GET /api/v1/assets/{symbol}/history`.
   - Added single-active-job mutex guard returning `HTTP 409 Conflict` with `{"detail": "Sync job already in progress", "current_job_id": "...", "status": "IN_PROGRESS"}` on overlapping synchronization triggers.
