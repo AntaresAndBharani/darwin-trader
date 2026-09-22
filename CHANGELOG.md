@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **CLI Subcommand & Trading Committee Workspace Skill (Issue #85, Parent #83)**:
+  - Added CLI `committee` subcommand in `strategy_engine/cli.py` (`python -m strategy_engine.cli committee <SYMBOL>`) supporting `--mode` (`entry`/`exit`), `--direction` (`long`/`short`), `--entry-price`, `--format` (`markdown`/`json`), `--benchmark`, and `--db-path`.
+  - Implemented fail-closed error handling catching `HistoricalDataNotFoundError` for cold-start un-cached assets, advising the operator to execute `python -m strategy_engine.cli sync-history --symbol <SYMBOL>`.
+  - Implemented deterministic `Technical Context Briefing` markdown formatting strictly separated from LLM wave narrative and consensus score.
+  - Created Antigravity workspace skill `.agents/skills/trading-committee/SKILL.md` powered by Gemini 3.8 Flash (High), featuring a 4-persona deliberation panel (Regime Follower, Price Action Specialist, Wave Analyst, and Chief Risk Officer), a 4-stage workflow, a 3-round dispute resolution cap, and standardized Committee Trading Card output.
+  - Added CLI integration test suite in `strategy_engine/tests/test_committee_cli.py` covering Gherkin acceptance criteria (help display, missing symbol, cold-start handling, JSON output validation against Pydantic schema, markdown format and strict briefing boundary verification, optional and positional arguments, H1 bar volume profiling, custom benchmarks, short-history degraded regime, and staleness detection).
+
 - **Deterministic Technical Calculator & Domain Models (Issue #84)**:
   - Added Pydantic schemas in `strategy_engine/models.py`: `TradeAction` enum (`ENTER`, `WAIT`, `EXIT`, `SCALE_OUT`, `PASS`), `MarketRegime` enum (`STAGE_1_ACCUMULATION`, `STAGE_2_MARKUP`, `STAGE_3_DISTRIBUTION`, `STAGE_4_DECLINE`, `CHOPPY`), `CommitteeVerdict` (with optional non-actionable fields and `to_trade_signal()` helper), `CommitteeContext`, and fail-closed `HistoricalDataNotFoundError`.
   - Implemented pure deterministic technical calculator in `strategy_engine/committee_calculator.py` with zero network and MT5 imports.
