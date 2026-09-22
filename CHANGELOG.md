@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **CLI Ingestion Tool & FastAPI Background Sync Router (Issue #75)**:
+  - Created non-interactive CLI utility `sync-history` in `strategy_engine/cli.py` supporting `--symbol`, `--category`, `--timeframe`, and `--fresh` flags with robust error handling and execution reporting.
+  - Implemented background synchronization router endpoints in `api_gateway/routes_assets.py` with strict route ordering preceding dynamic `/{symbol}`: `POST /api/v1/assets/history/sync`, `GET /api/v1/assets/history/sync/status`, and paginated read endpoint `GET /api/v1/assets/{symbol}/history`.
+  - Added single-active-job mutex guard returning `HTTP 409 Conflict` with `{"detail": "Sync job already in progress", "current_job_id": "...", "status": "IN_PROGRESS"}` on overlapping synchronization triggers.
+  - Implemented decoupled background worker with 25ms yield sleep, tracking `completed_assets`, `failed_assets`, `total_assets`, and `current_symbol` telemetry with non-fatal delisted symbol fault tolerance.
+  - Expanded `DarwinApiClient` in `tui/api_client.py` with asynchronous historical methods (`sync_historical_rates`, `get_sync_status`, `get_historical_rates`) equipped with a dedicated 15.0-second timeout and offline resilience.
+  - Added comprehensive test suite in `api_gateway/tests/test_assets.py` validating background synchronization telemetry, HTTP 409 conflict rejection, paginated reads, scoped re-sync, route ordering disambiguation, SDK methods, and CLI command execution.
+
 - **SQLite Storage Layer, Models, .gitignore & MT5 Historical Connector (Issue #74)**:
   - Created `HistoricalRatesDB` in `strategy_engine/historical_db.py` operating in SQLite WAL mode with 60-second busy timeout (`PRAGMA busy_timeout = 60000;`), automatic `data/` directory initialization, and composite primary key `(symbol, timeframe, time DESC) WITHOUT ROWID` guaranteeing clustered range seek performance.
   - Implemented `INSERT OR REPLACE` upsert semantics to cleanly update forming daily bars with finalized OHLCV data on subsequent synchronizations without duplicate row creation or key collisions.
