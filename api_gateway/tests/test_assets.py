@@ -3,13 +3,23 @@ Integration tests for FastAPI Asset Router, Gateway Mounting, and Client SDK.
 Covers Gherkin Scenarios 1 through 6 for Issue #67 / #69.
 """
 from unittest.mock import MagicMock, patch
+import time
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from api_gateway.main import app
+from api_gateway.routes_assets import _reset_sync_state, _set_sync_state_for_testing
 from api_gateway.routes_strategy import connector, global_config
-from strategy_engine.models import AssetInfo
+from strategy_engine.cli import main as cli_main
+from strategy_engine.historical_db import HistoricalRatesDB
+from strategy_engine.models import (
+    AssetInfo,
+    HistoricalBar,
+    HistoricalRatesResponse,
+    HistoricalSyncResponse,
+    HistoricalSyncStatus,
+)
 from tui.api_client import DarwinApiClient
 
 client = TestClient(app)
@@ -337,3 +347,272 @@ async def test_client_sdk_offline_fallback():
     asset_info = await offline_sdk.get_asset_info("AMZN")
     assert asset_info is None
     await offline_sdk.close()
+
+
+def test_scenario_3_background_sync_and_partial_failure():
+    """
+    Scenario 3: Asynchronous Background Sync Telemetry & Partial Failure Resilience Contract.
+    Given FastAPI gateway is running and no sync job is currently active
+    When a client requests POST /api/v1/assets/history/sync?category=stocks&fresh=true
+    Then response status is 202 Accepted and returns status 'IN_PROGRESS'
+    And subsequent requests to GET /api/v1/assets/history/sync/status report progress telemetry
+    And if an invalid or delisted symbol is encountered, failed_assets is incremented without crashing
+    And regular gateway endpoints continue responding without thread starvation.
+    """
+    _reset_sync_state()
+
+    # 1. Trigger fresh batch sync
+    response = client.post("/api/v1/assets/history/sync?category=stocks&fresh=true")
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+    assert data["status"] == "IN_PROGRESS"
+    assert data["message"] == "Historical sync job started"
+
+    # 2. Check telemetry immediately
+    status_resp = client.get("/api/v1/assets/history/sync/status")
+    assert status_resp.status_code == 200
+    stat = status_resp.json()
+    assert stat["total_assets"] == 5
+
+    # 3. Regular endpoints continue responding cleanly
+    assets_resp = client.get("/api/v1/assets")
+    assert assets_resp.status_code == 200
+
+    # 4. Wait for completion
+    for _ in range(40):
+        stat = client.get("/api/v1/assets/history/sync/status").json()
+        if stat["status"] == "COMPLETED":
+            break
+        time.sleep(0.05)
+
+    assert stat["status"] == "COMPLETED"
+    assert stat["completed_assets"] == 5
+    assert stat["failed_assets"] == 0
+
+    # 5. Test partial failure resilience on delisted symbol
+    _reset_sync_state()
+    original_sync = connector.sync_historical_rates
+
+    def mock_sync_with_failure(symbol, timeframe="D1", fresh=False, db=None):
+        if symbol == "PM":
+            return None, 0
+        return original_sync(symbol, timeframe=timeframe, fresh=fresh, db=db)
+
+    with patch.object(connector, "sync_historical_rates", side_effect=mock_sync_with_failure):
+        fail_resp = client.post("/api/v1/assets/history/sync?category=stocks")
+        assert fail_resp.status_code == 202
+
+        for _ in range(40):
+            stat = client.get("/api/v1/assets/history/sync/status").json()
+            if stat["status"] == "COMPLETED":
+                break
+            time.sleep(0.05)
+
+        assert stat["status"] == "COMPLETED"
+        assert stat["completed_assets"] == 4
+        assert stat["failed_assets"] == 1
+
+    _reset_sync_state()
+
+
+def test_scenario_7_concurrent_sync_rejection_with_http_409():
+    """
+    Scenario 7: Concurrent Sync Rejection with HTTP 409 Conflict.
+    Given a bulk historical sync job is already currently 'IN_PROGRESS'
+    When a client or TUI user submits a second POST /api/v1/assets/history/sync request
+    Then the gateway immediately rejects the request with HTTP status 409 Conflict
+    And returns JSON detail {"detail": "Sync job already in progress", "current_job_id": "...", "status": "IN_PROGRESS"}.
+    """
+    _reset_sync_state()
+    _set_sync_state_for_testing(status="IN_PROGRESS", job_id="mock-active-job-xyz")
+
+    resp_conflict = client.post("/api/v1/assets/history/sync")
+    assert resp_conflict.status_code == 409
+    body = resp_conflict.json()
+    assert body["detail"] == "Sync job already in progress"
+    assert body["current_job_id"] == "mock-active-job-xyz"
+    assert body["status"] == "IN_PROGRESS"
+
+    _reset_sync_state()
+
+
+def test_scenario_4_and_5_historical_rates_pagination_and_scoped_resync():
+    """
+    Scenario 4 & 5: Historical Rates Paginated Reads and Scoped Re-sync.
+    Given database contains bars for 'MSFT'
+    When querying GET /api/v1/assets/MSFT/history?timeframe=D1&limit=500&offset=0
+    Then returns total_bars, limit, offset, page, total_pages, and bars list.
+    And when triggering POST /api/v1/assets/history/sync?symbol=MSFT&fresh=true
+    Then initiates scoped sync for only MSFT (total_assets=1).
+    """
+    _reset_sync_state()
+    db = HistoricalRatesDB()
+    db.clear_rates(symbol="MSFT")
+
+    # Insert 1200 test bars
+    test_bars = [
+        HistoricalBar(
+            symbol="MSFT",
+            timeframe="D1",
+            time=1700000000 + i * 86400,
+            open=300.0 + i * 0.1,
+            high=305.0 + i * 0.1,
+            low=299.0 + i * 0.1,
+            close=304.0 + i * 0.1,
+            tick_volume=1500,
+            spread=2,
+        )
+        for i in range(1200)
+    ]
+    db.insert_rates(test_bars)
+
+    # Page 1: 500 bars
+    resp_p1 = client.get("/api/v1/assets/MSFT/history?timeframe=D1&limit=500&offset=0")
+    assert resp_p1.status_code == 200
+    data_p1 = resp_p1.json()
+    assert data_p1["symbol"] == "MSFT"
+    assert data_p1["timeframe"] == "D1"
+    assert data_p1["total_bars"] == 1200
+    assert data_p1["limit"] == 500
+    assert data_p1["offset"] == 0
+    assert data_p1["page"] == 1
+    assert data_p1["total_pages"] == 3
+    assert len(data_p1["bars"]) == 500
+
+    # Page 2: 500 bars
+    resp_p2 = client.get("/api/v1/assets/MSFT/history?timeframe=D1&limit=500&offset=500")
+    assert resp_p2.status_code == 200
+    data_p2 = resp_p2.json()
+    assert data_p2["page"] == 2
+    assert data_p2["offset"] == 500
+    assert len(data_p2["bars"]) == 500
+
+    # Page 3: 200 bars
+    resp_p3 = client.get("/api/v1/assets/MSFT/history?timeframe=D1&limit=500&offset=1000")
+    assert resp_p3.status_code == 200
+    data_p3 = resp_p3.json()
+    assert data_p3["page"] == 3
+    assert data_p3["offset"] == 1000
+    assert len(data_p3["bars"]) == 200
+
+    # Scoped re-sync for MSFT
+    resp_scoped = client.post("/api/v1/assets/history/sync?symbol=MSFT&fresh=true")
+    assert resp_scoped.status_code == 202
+    stat = client.get("/api/v1/assets/history/sync/status").json()
+    assert stat["total_assets"] == 1
+
+    # Cleanup
+    db.clear_rates(symbol="MSFT")
+    _reset_sync_state()
+
+
+def test_strict_route_ordering_preceding_symbol():
+    """
+    Route Ordering Verification:
+    Static history endpoints must precede /{symbol} to prevent capturing 'history' as symbol parameter.
+    """
+    # 1. /history/sync/status must return sync telemetry, NOT 404 "Asset 'history' not found"
+    resp_status = client.get("/api/v1/assets/history/sync/status")
+    assert resp_status.status_code == 200
+    assert "status" in resp_status.json()
+
+    # 2. /{symbol}/history must return HistoricalRatesResponse
+    resp_hist = client.get("/api/v1/assets/NVDA/history")
+    assert resp_hist.status_code == 200
+    assert resp_hist.json()["symbol"] == "NVDA"
+
+    # 3. /{symbol} must return AssetInfo
+    resp_asset = client.get("/api/v1/assets/NVDA")
+    assert resp_asset.status_code == 200
+    assert resp_asset.json()["symbol"] == "NVDA"
+    assert "lot_min" in resp_asset.json()
+
+    # 4. Unknown asset history returns empty rates rather than 404
+    resp_unknown_hist = client.get("/api/v1/assets/UNKNOWN_XYZ/history")
+    assert resp_unknown_hist.status_code == 200
+    assert resp_unknown_hist.json()["total_bars"] == 0
+    assert resp_unknown_hist.json()["bars"] == []
+
+
+@pytest.mark.asyncio
+async def test_client_sdk_historical_methods_and_15s_timeout():
+    """
+    Client SDK Integration Test for Historical Operations:
+    Verifies DarwinApiClient methods for sync, status, and paginated rates with 15.0s timeout.
+    """
+    _reset_sync_state()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as test_httpx:
+        sdk = DarwinApiClient(base_url="http://test", client=test_httpx)
+        assert sdk.historical_timeout == 15.0
+
+        # 1. sync_historical_rates
+        sync_res = await sdk.sync_historical_rates(symbol="MSFT", fresh=True)
+        assert isinstance(sync_res, HistoricalSyncResponse)
+        assert sync_res.status == "IN_PROGRESS"
+        assert sync_res.job_id != ""
+
+        # 2. get_sync_status
+        status_res = await sdk.get_sync_status()
+        assert isinstance(status_res, HistoricalSyncStatus)
+        assert status_res.total_assets == 1
+
+        # 3. get_historical_rates
+        rates_res = await sdk.get_historical_rates("MSFT", limit=500, offset=0)
+        assert isinstance(rates_res, HistoricalRatesResponse)
+        assert rates_res.symbol == "MSFT"
+
+        # 4. 409 Conflict handling in SDK
+        _set_sync_state_for_testing(status="IN_PROGRESS", job_id="sdk-conflict-job-id")
+
+        conflict_res = await sdk.sync_historical_rates(symbol="AAPL")
+        assert conflict_res.status == "IN_PROGRESS"
+        assert conflict_res.job_id == "sdk-conflict-job-id"
+        assert "already in progress" in conflict_res.message
+
+    _reset_sync_state()
+
+    # 5. Offline SDK resilience
+    offline_sdk = DarwinApiClient(base_url="http://127.0.0.1:9999", timeout=0.1, historical_timeout=0.1)
+    rates_off = await offline_sdk.get_historical_rates("MSFT")
+    assert rates_off.bars == []
+    assert rates_off.total_bars == 0
+
+    stat_off = await offline_sdk.get_sync_status()
+    assert stat_off.status == "IDLE"
+
+    sync_off = await offline_sdk.sync_historical_rates("MSFT")
+    assert sync_off.status == "ERROR"
+    await offline_sdk.close()
+
+
+def test_cli_sync_history_command(tmp_path):
+    """
+    CLI Ingestion Tool Test:
+    Verifies 'python -m strategy_engine.cli sync-history' with symbol, category, and fresh options.
+    """
+    db_file = str(tmp_path / "cli_test.db")
+
+    # 1. Sync single symbol
+    rc = cli_main(["sync-history", "--symbol", "AMZN", "--db-path", db_file])
+    assert rc == 0
+    db = HistoricalRatesDB(db_path=db_file)
+    assert db.get_total_bars("AMZN") > 0
+
+    # 2. Sync single symbol with --fresh
+    rc_fresh = cli_main(["sync-history", "--symbol", "AMZN", "--fresh", "--db-path", db_file])
+    assert rc_fresh == 0
+
+    # 3. Sync category
+    rc_cat = cli_main(["sync-history", "--category", "stocks", "--db-path", db_file])
+    assert rc_cat == 0
+
+    # 4. Invalid category returns 1
+    rc_inv = cli_main(["sync-history", "--category", "crypto_invalid", "--db-path", db_file])
+    assert rc_inv == 1
+
+    # 5. No command / invalid command returns 1
+    assert cli_main([]) == 1
+    assert cli_main(["unknown-cmd"]) == 1
+
