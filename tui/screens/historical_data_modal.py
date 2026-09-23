@@ -67,6 +67,7 @@ class HistoricalDataModal(ModalScreen[None]):
         color: $text-muted;
         margin-right: 1;
         text-style: bold;
+        width: auto;
         height: auto;
         padding-top: 1;
     }
@@ -77,12 +78,14 @@ class HistoricalDataModal(ModalScreen[None]):
     }
 
     #btn-fresh-restart {
+        width: auto;
         margin-right: 1;
     }
 
     #simulation-badge {
         color: cyan;
         text-style: bold;
+        width: auto;
         margin-left: 1;
         display: none;
     }
@@ -146,6 +149,7 @@ class HistoricalDataModal(ModalScreen[None]):
     #footer-status {
         color: $warning;
         text-style: bold;
+        width: auto;
         margin-left: 1;
     }
 

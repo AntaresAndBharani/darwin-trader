@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **TUI HistoricalDataModal Layout Flex Alignment**:
+  - Added explicit `width: auto` to `.control-label`, `#btn-fresh-restart`, `#simulation-badge`, and `#footer-status` in `tui/screens/historical_data_modal.py` to prevent flex layout collapse in Textual when `#footer-status` is empty.
+
 ### Added
 - **CLI Subcommand & Trading Committee Workspace Skill (Issue #85, Parent #83)**:
   - Added CLI `committee` subcommand in `strategy_engine/cli.py` (`python -m strategy_engine.cli committee <SYMBOL>`) supporting `--mode` (`entry`/`exit`), `--direction` (`long`/`short`), `--entry-price`, `--format` (`markdown`/`json`), `--benchmark`, and `--db-path`.
