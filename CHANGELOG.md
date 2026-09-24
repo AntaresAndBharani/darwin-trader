@@ -11,6 +11,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Added explicit `width: auto` to `.control-label`, `#btn-fresh-restart`, `#simulation-badge`, and `#footer-status` in `tui/screens/historical_data_modal.py` to prevent flex layout collapse in Textual when `#footer-status` is empty.
 
 ### Added
+- **Granular History Purge Command & Safety Guards (Issue #94, Parent #92)**:
+  - Enhanced `HistoricalRatesDB.clear_rates` in `strategy_engine/historical_db.py` to support dual single/multi-symbol signatures (`symbol` and `symbols`), canonical `'ALL'` timeframe normalization (omitting timeframe clause without literal mismatch), connection-setup hygiene by moving `PRAGMA journal_mode=WAL;` to `_init_db()`, and returning total deleted row count.
+  - Implemented `purge-history` CLI subcommand in `strategy_engine/cli.py` (`python -m strategy_engine.cli purge-history`) with `--symbol`, `--category`, `--timeframe` (default `'all'`), `--all`, `-y`/`--yes`, and `--db-path` flags.
+  - Added fail-safe validation aborting with exit code 1 if no target (`--symbol`, `--category`, or `--all`) or empty/whitespace-only symbols are provided.
+  - Added non-interactive headless confirmation guard failing fast with exit code 1 when stdin is not a TTY without `-y`/`--yes`.
+  - Added interactive confirmation prompt with safe user cancellation exiting with code 0 (`"Operation cancelled by user."`) leaving database records untouched.
+  - Added comprehensive test suite `TestCliHistoryGranularPurge` in `strategy_engine/tests/test_cli_history.py` covering Gherkin acceptance criteria (Scenarios 3, 4, 5, 6, 10, 11), granular timeframe purging, category-wide purging, safety guards, interactive confirmation/cancellation, and WAL pragma hygiene.
+
 - **Parallel Batch Sync & Multi-Symbol Worker Pool (Issue #93, Parent #92)**:
   - Augmented `StrategyConfig` in `strategy_engine/config.py` with environment-driven `mock_mode` resolution from `MOCK_MODE` (defaulting to true).
   - Updated `HistoricalSyncStatus` in `strategy_engine/models.py` with `failed_symbols: List[str]` and `total_bars: int`, maintaining backward-compatible lockstep synchronization with `failed_assets`.
