@@ -19,6 +19,7 @@ Comprehensive BDD coverage across:
   * Kill-Switch Invocation with Zero Open Positions (test_kill_switch_with_zero_positions_scenario_8)
   * Simulation Mode Telemetry & Badge (test_simulation_mode_telemetry_and_badge_scenario_9, test_header_bar_badge_modes)
 """
+import asyncio
 import pytest
 import httpx
 from unittest.mock import AsyncMock
@@ -37,6 +38,7 @@ from strategy_engine.models import (
     HistoricalRatesResponse,
     HistoricalSyncResponse,
     HistoricalSyncStatus,
+    InstitutionalMetrics,
     OrderType,
     Position,
 )
@@ -2709,6 +2711,341 @@ def test_historical_data_modal_date_formatting():
     modal.current_timeframe = "H1"
     intraday_str = modal._format_date(1700000000)
     assert intraday_str == "2023-11-14 22:13"
+
+
+# =============================================================================
+# Issue #106: TUI Asset Explorer Institutional Metrics Drawer (Slice 2, Parent #104)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_api_client_get_asset_metrics():
+    """Verify DarwinApiClient.get_asset_metrics handles 200, 404, and network errors."""
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/assets/AAPL/metrics":
+            return httpx.Response(
+                200,
+                json={
+                    "symbol": "AAPL",
+                    "insufficient_data": False,
+                    "bars_found": 21,
+                    "bars_required": 21,
+                    "yang_zhang_vol_annualized": 0.25,
+                    "amihud_sensitivity": 0.0000015,
+                    "vwap": 220.50,
+                    "vwap_upper": 225.00,
+                    "vwap_lower": 216.00,
+                    "vwap_deviation_sigmas": 0.45,
+                    "roll_spread_pct": 0.0012,
+                    "roll_spread_absolute": 0.26,
+                },
+            )
+        elif request.url.path == "/api/v1/assets/UNSYNCED/metrics":
+            return httpx.Response(404, json={"detail": "No local historical rates found; synchronize history first"})
+        return httpx.Response(500)
+
+    transport = httpx.MockTransport(mock_handler)
+    mock_http_client = httpx.AsyncClient(transport=transport, base_url="http://testserver")
+    api_client = DarwinApiClient(client=mock_http_client)
+
+    # 1. 200 OK -> InstitutionalMetrics returned
+    metrics = await api_client.get_asset_metrics("AAPL")
+    assert metrics is not None
+    assert metrics.symbol == "AAPL"
+    assert metrics.insufficient_data is False
+    assert metrics.yang_zhang_vol_annualized == 0.25
+    assert metrics.vwap == 220.50
+
+    # 2. 404 Not Found -> None returned
+    unsynced = await api_client.get_asset_metrics("UNSYNCED")
+    assert unsynced is None
+
+    # 3. Offline / Error -> None returned
+    error_res = await api_client.get_asset_metrics("ERROR_SYM")
+    assert error_res is None
+
+    await api_client.close()
+    await mock_http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_scenario_10_metrics_drawer_state_synchronization_and_discarding_stale_responses():
+    """Verify Scenario 10: TUI Metrics Drawer State Synchronization and Discarding Stale Responses.
+
+    Given the Asset Explorer modal is open with the metrics drawer expanded for "AAPL"
+    When the user navigates down to select "MSFT"
+    Then the drawer immediately updates its header to "MSFT" and displays "Loading institutional metrics for MSFT..."
+    And when the metrics API response for "MSFT" resolves
+    Then the drawer displays verified metrics for "MSFT"
+    And if a delayed response for "AAPL" arrives afterward, it is discarded without overwriting MSFT metrics.
+    """
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = [
+        AssetInfo(
+            symbol="AAPL",
+            description="Apple Inc",
+            category="Stocks/US/Nasdaq",
+            currency="USD",
+            digits=2,
+        ),
+        AssetInfo(
+            symbol="MSFT",
+            description="Microsoft Corporation",
+            category="Stocks/US/Nasdaq",
+            currency="USD",
+            digits=2,
+        ),
+    ]
+
+    metrics_aapl = InstitutionalMetrics(
+        symbol="AAPL",
+        insufficient_data=False,
+        bars_found=21,
+        bars_required=21,
+        yang_zhang_vol_annualized=0.225,
+        amihud_sensitivity=1.2e-6,
+        vwap=220.0,
+        vwap_deviation_sigmas=0.5,
+        roll_spread_pct=0.0010,
+    )
+    metrics_msft = InstitutionalMetrics(
+        symbol="MSFT",
+        insufficient_data=False,
+        bars_found=21,
+        bars_required=21,
+        yang_zhang_vol_annualized=0.185,
+        amihud_sensitivity=2.5e-6,
+        vwap=425.0,
+        vwap_deviation_sigmas=-0.3,
+        roll_spread_pct=0.0008,
+    )
+
+    msft_event = asyncio.Event()
+
+    async def fake_get_metrics(symbol: str):
+        if symbol == "AAPL":
+            return metrics_aapl
+        elif symbol == "MSFT":
+            await msft_event.wait()
+            return metrics_msft
+        return None
+
+    mock_client.get_asset_metrics.side_effect = fake_get_metrics
+
+    modal = AssetExplorerModal(api_client=mock_client, debounce_delay=0.05)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        assert isinstance(app.screen, AssetExplorerModal)
+        drawer = modal.query_one("#institutional-metrics-drawer")
+        header = modal.query_one("#metrics-drawer-header", Static)
+        content = modal.query_one("#metrics-drawer-content", Static)
+
+        # Drawer is hidden initially
+        assert "visible" not in drawer.classes
+
+        # Step 1: Open drawer with AAPL selected (press 'i')
+        await pilot.press("i")
+        await pilot.pause(0.1)
+
+        assert "visible" in drawer.classes
+        assert "AAPL" in str(header.content)
+        assert modal._current_metrics is not None
+        assert modal._current_metrics.symbol == "AAPL"
+        assert "YZ Vol" in str(content.content)
+
+        # Step 2: Navigate down to MSFT
+        table = modal.query_one("#assets-data-table", DataTable)
+        table.focus()
+        await pilot.press("down")
+
+        # Then the drawer immediately updates its header to "MSFT" and displays "Loading institutional metrics for MSFT..."
+        assert "MSFT" in str(header.content)
+        assert "Loading institutional metrics for MSFT..." in str(content.content)
+
+        # Step 3: When the metrics API response for MSFT resolves
+        msft_event.set()
+        await pilot.pause(0.1)
+        assert "MSFT" in str(header.content)
+        assert modal._current_metrics is not None
+        assert modal._current_metrics.symbol == "MSFT"
+        assert "YZ Vol" in str(content.content)
+
+        # Step 4: Delayed response for AAPL arrives afterward
+        # Discard check: if late AAPL response arrives, _metrics_request_symbol is MSFT, so AAPL is discarded
+        await modal._fetch_metrics("AAPL")
+        await pilot.pause(0.05)
+
+        # Must still be MSFT metrics!
+        assert modal._current_metrics.symbol == "MSFT"
+        assert "MSFT" in str(header.content)
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_scenario_11_metrics_drawer_cold_start_unsynced_state():
+    """Verify Scenario 11: TUI Metrics Drawer Cold-Start / Unsynced State.
+
+    Given an asset "UNSYNCED_ASSET" with no local rates in SQLite
+    When the user selects "UNSYNCED_ASSET" and presses "I"
+    Then the drawer renders: "No local rates synced for UNSYNCED_ASSET. Press [H] to view/sync history."
+    And no unhandled exceptions are raised.
+    """
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = [
+        AssetInfo(
+            symbol="UNSYNCED_ASSET",
+            description="Unsynced Ticker Inc",
+            category="Stocks/US/Other",
+            currency="USD",
+            digits=2,
+        )
+    ]
+    # Gateway returns 404 -> get_asset_metrics returns None
+    mock_client.get_asset_metrics.return_value = None
+
+    modal = AssetExplorerModal(api_client=mock_client, debounce_delay=0.0)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        # User presses "I"
+        await pilot.press("I")
+        await pilot.pause(0.1)
+
+        drawer = modal.query_one("#institutional-metrics-drawer")
+        assert "visible" in drawer.classes
+
+        content = modal.query_one("#metrics-drawer-content", Static)
+        assert "No local rates synced for UNSYNCED_ASSET. Press [H] to view/sync history." in str(content.content)
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_metrics_drawer_insufficient_data_state():
+    """Verify that when 200 is returned with insufficient_data=True, drawer renders descriptive state."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = [
+        AssetInfo(
+            symbol="PARTIAL_SYM",
+            description="Partial History Asset",
+            category="Stocks/US/Other",
+            currency="USD",
+            digits=2,
+        )
+    ]
+    mock_client.get_asset_metrics.return_value = InstitutionalMetrics(
+        symbol="PARTIAL_SYM",
+        insufficient_data=True,
+        bars_found=10,
+        bars_required=21,
+    )
+
+    modal = AssetExplorerModal(api_client=mock_client, debounce_delay=0.0)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        await pilot.press("i")
+        await pilot.pause(0.1)
+
+        content = modal.query_one("#metrics-drawer-content", Static)
+        assert "Insufficient historical data for PARTIAL_SYM (10/21 bars found)" in str(content.content)
+        assert "Press [H] to sync." in str(content.content)
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_metrics_drawer_toggle_and_search_input_isolation():
+    """Verify drawer toggles on/off with hotkey, and pressing 'i' while search is focused does not toggle drawer."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = [
+        AssetInfo(
+            symbol="NVDA",
+            description="NVIDIA Corporation",
+            category="Stocks/US/Nasdaq",
+            currency="USD",
+            digits=2,
+        )
+    ]
+    mock_client.get_asset_metrics.return_value = InstitutionalMetrics(
+        symbol="NVDA",
+        insufficient_data=False,
+        bars_found=21,
+        bars_required=21,
+        yang_zhang_vol_annualized=0.45,
+    )
+
+    modal = AssetExplorerModal(api_client=mock_client, debounce_delay=0.0)
+    app = DarwinTraderApp(api_client=mock_client)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.push_screen(modal)
+        await pilot.pause(0.1)
+
+        drawer = modal.query_one("#institutional-metrics-drawer")
+        assert "visible" not in drawer.classes
+
+        # 1. Press 'i' on table -> drawer opens
+        await pilot.press("i")
+        await pilot.pause(0.1)
+        assert "visible" in drawer.classes
+
+        # 2. Press 'i' again on table -> drawer closes
+        await pilot.press("i")
+        await pilot.pause(0.1)
+        assert "visible" not in drawer.classes
+
+        # 3. Focus search input -> pressing 'i' should type 'i' and NOT open drawer
+        search_input = modal.query_one("#asset-search-input", Input)
+        search_input.focus()
+        await pilot.pause(0.1)
+        assert search_input.has_focus
+
+        await pilot.press("i")
+        await pilot.pause(0.1)
+        assert "visible" not in drawer.classes
+        assert "i" in search_input.value
+
+        # 4. Check help hint contains [I] Metrics
+        help_hint = modal.query_one(".help-hint", Static)
+        assert "[I] Metrics" in str(help_hint.content)
 
 
 

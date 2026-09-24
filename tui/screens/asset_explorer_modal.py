@@ -13,7 +13,7 @@ from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Select, Static
 
-from strategy_engine.models import AssetInfo
+from strategy_engine.models import AssetInfo, InstitutionalMetrics
 from tui.api_client import DarwinApiClient
 
 
@@ -123,6 +123,27 @@ class AssetExplorerModal(ModalScreen[None]):
         border: solid $primary-darken-2;
     }
 
+    #institutional-metrics-drawer {
+        height: 4;
+        border: solid $accent;
+        background: $surface;
+        padding: 0 1;
+        display: none;
+    }
+
+    #institutional-metrics-drawer.visible {
+        display: block;
+    }
+
+    #metrics-drawer-header {
+        text-style: bold;
+        color: $accent;
+    }
+
+    #metrics-drawer-content {
+        color: $text;
+    }
+
     .modal-footer {
         height: auto;
         margin-top: 1;
@@ -149,6 +170,8 @@ class AssetExplorerModal(ModalScreen[None]):
         Binding("escape", "dismiss_modal", "Close", show=True),
         Binding("h", "inspect_history", "Inspect History", show=True),
         Binding("H", "inspect_history", "Inspect History", show=False),
+        Binding("i", "toggle_metrics_drawer", "Metrics", show=True),
+        Binding("I", "toggle_metrics_drawer", "Metrics", show=False),
         Binding("s", "focus_search", "Search", show=False),
         Binding("f4", "reset_filters", "Reset Filters", show=True),
         Binding("F4", "reset_filters", "Reset Filters", show=False),
@@ -158,6 +181,7 @@ class AssetExplorerModal(ModalScreen[None]):
         self,
         api_client: Optional[DarwinApiClient] = None,
         default_category: Optional[str] = None,
+        debounce_delay: float = 0.15,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -168,6 +192,11 @@ class AssetExplorerModal(ModalScreen[None]):
         self._current_assets: List[AssetInfo] = []
         self._taxonomy: Dict[str, Dict[str, Set[str]]] = {}
         self._updating_filters: bool = False
+        self._drawer_open: bool = False
+        self._metrics_request_symbol: Optional[str] = None
+        self._current_metrics: Optional[InstitutionalMetrics] = None
+        self._metrics_timer = None
+        self.debounce_delay: float = debounce_delay
 
     def compose(self) -> ComposeResult:
         with Container(id="asset-explorer-dialog"):
@@ -204,9 +233,12 @@ class AssetExplorerModal(ModalScreen[None]):
             yield Static("", id="error-banner")
             yield Static("Loading assets...", id="status-bar")
             yield DataTable(id="assets-data-table", cursor_type="row")
+            with Container(id="institutional-metrics-drawer"):
+                yield Static("", id="metrics-drawer-header")
+                yield Static("", id="metrics-drawer-content")
             with Horizontal(classes="modal-footer"):
                 yield Static(
-                    "[↑/↓] Navigate  |  [H] Inspect History  |  [F4] Reset Filters  |  [S] Focus Search  |  [ESC] Close",
+                    "[↑/↓] Navigate  |  [I] Metrics  |  [H] Inspect History  |  [F4] Reset Filters  |  [S] Focus Search  |  [ESC] Close",
                     classes="help-hint",
                 )
                 yield Button("Inspect History", id="btn-inspect-history", variant="primary")
@@ -228,6 +260,7 @@ class AssetExplorerModal(ModalScreen[None]):
             "Ask",
         )
         await self._load_assets()
+        table.focus()
 
     def _build_taxonomy(self) -> None:
         """Extracts taxonomy mapping {class: {region: set(exchanges)}} from self._all_assets."""
@@ -375,6 +408,16 @@ class AssetExplorerModal(ModalScreen[None]):
             status.update("No assets found (Gateway may be in mock or offline mode)")
         else:
             status.update(f"Showing {visible} of {total} assets{match_str}")
+
+        if self._drawer_open:
+            asset = self._get_selected_asset()
+            if asset:
+                self._on_symbol_highlighted(asset.symbol, immediate=True)
+            else:
+                self._metrics_request_symbol = None
+                self._current_metrics = None
+                self.query_one("#metrics-drawer-header", Static).update("Institutional Metrics")
+                self.query_one("#metrics-drawer-content", Static).update("No asset selected")
 
     @on(Select.Changed, "#select-class")
     def on_class_changed(self, event: Select.Changed) -> None:
@@ -539,3 +582,117 @@ class AssetExplorerModal(ModalScreen[None]):
     @on(DataTable.RowSelected, "#assets-data-table")
     def on_row_selected(self, event: DataTable.RowSelected) -> None:
         self.action_inspect_history()
+
+    def action_toggle_metrics_drawer(self) -> None:
+        """Toggles the institutional metrics drawer when table is focused."""
+        search_input = self.query_one("#asset-search-input", Input)
+        if search_input.has_focus:
+            return
+        self._toggle_metrics_drawer()
+
+    def _toggle_metrics_drawer(self) -> None:
+        """Toggles visibility of the institutional metrics drawer."""
+        drawer = self.query_one("#institutional-metrics-drawer")
+        self._drawer_open = not self._drawer_open
+        if self._drawer_open:
+            drawer.add_class("visible")
+            asset = self._get_selected_asset()
+            if asset:
+                self._on_symbol_highlighted(asset.symbol, immediate=True)
+        else:
+            drawer.remove_class("visible")
+            if self._metrics_timer is not None:
+                self._metrics_timer.stop()
+                self._metrics_timer = None
+
+    def _on_symbol_highlighted(self, symbol: str, immediate: bool = False) -> None:
+        """Updates drawer to loading state and schedules a debounced metrics fetch."""
+        clean_sym = symbol.strip().upper()
+        self._metrics_request_symbol = clean_sym
+        self._update_drawer_loading(clean_sym)
+
+        if self._metrics_timer is not None:
+            self._metrics_timer.stop()
+            self._metrics_timer = None
+
+        if immediate or self.debounce_delay <= 0:
+            self.run_worker(self._fetch_metrics(clean_sym))
+        else:
+            self._metrics_timer = self.set_timer(
+                self.debounce_delay,
+                lambda sym=clean_sym: self.run_worker(self._fetch_metrics(sym)),
+            )
+
+    def _update_drawer_loading(self, symbol: str) -> None:
+        """Sets the drawer to the initial loading state."""
+        header = self.query_one("#metrics-drawer-header", Static)
+        content = self.query_one("#metrics-drawer-content", Static)
+        header.update(f"Institutional Metrics: {symbol}")
+        content.update(f"Loading institutional metrics for {symbol}...")
+
+    async def _fetch_metrics(self, request_symbol: str) -> None:
+        """Asynchronously queries metrics and discards out-of-order responses."""
+        try:
+            metrics = await self.api_client.get_asset_metrics(request_symbol)
+        except Exception:
+            metrics = None
+
+        # Guard: safely discard out-of-order responses during fast navigation
+        if self._metrics_request_symbol != request_symbol:
+            return
+
+        if not self._drawer_open:
+            return
+
+        self._render_metrics(request_symbol, metrics)
+
+    def _render_metrics(self, symbol: str, metrics: Optional[InstitutionalMetrics]) -> None:
+        """Renders verified metrics, unsynced (404), or insufficient data states."""
+        header = self.query_one("#metrics-drawer-header", Static)
+        content = self.query_one("#metrics-drawer-content", Static)
+        header.update(f"Institutional Metrics: {symbol}")
+
+        if metrics is None:
+            # Unsynced / 404 state (Scenario 11)
+            self._current_metrics = None
+            content.update(f"No local rates synced for {symbol}. Press [H] to view/sync history.")
+            return
+
+        self._current_metrics = metrics
+
+        if metrics.insufficient_data:
+            # Insufficient data state (Scenario 9)
+            content.update(
+                f"Insufficient historical data for {symbol} ({metrics.bars_found}/{metrics.bars_required} bars found). Press [H] to sync."
+            )
+            return
+
+        # Verified metrics state (Scenario 10)
+        yz_str = f"{metrics.yang_zhang_vol_annualized * 100:.1f}%" if metrics.yang_zhang_vol_annualized is not None else "--"
+        amihud_str = f"{metrics.amihud_sensitivity:.2e}" if metrics.amihud_sensitivity is not None else "--"
+        vwap_str = f"{metrics.vwap:.2f}" if metrics.vwap is not None else "--"
+        dev_str = f"{metrics.vwap_deviation_sigmas:+.2f}σ" if metrics.vwap_deviation_sigmas is not None else "--"
+        roll_str = f"{metrics.roll_spread_pct * 100:.2f}%" if metrics.roll_spread_pct is not None else "--"
+
+        content.update(
+            Text.from_markup(
+                f"YZ Vol: [bold]{yz_str}[/]  |  "
+                f"Amihud: [bold]{amihud_str}[/]  |  "
+                f"VWAP: [bold]{vwap_str}[/] ({dev_str})  |  "
+                f"Roll Spread: [bold]{roll_str}[/]"
+            )
+        )
+
+    @on(DataTable.RowHighlighted, "#assets-data-table")
+    def on_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if not self._drawer_open:
+            return
+        symbol = None
+        if event.row_key and event.row_key.value:
+            symbol = str(event.row_key.value)
+        if not symbol:
+            asset = self._get_selected_asset()
+            symbol = asset.symbol if asset else None
+        if not symbol:
+            return
+        self._on_symbol_highlighted(symbol, immediate=False)
