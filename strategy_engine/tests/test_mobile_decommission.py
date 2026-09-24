@@ -79,3 +79,23 @@ class TestMobileDecommission:
         import tui.app  # noqa: F401
         assert hasattr(api_gateway.main, "app")
         assert hasattr(tui.app, "DarwinTraderApp")
+
+    def test_build_workflow_streamlined_to_python(self):
+        """Scenario 3: .github/workflows/build.yml is streamlined to pure Python tests."""
+        build_yml = REPO_ROOT / ".github" / "workflows" / "build.yml"
+        assert build_yml.exists(), f"build.yml should exist at {build_yml}"
+        content = build_yml.read_text(encoding="utf-8")
+        assert "jobs:\n  build:" in content or "jobs:\r\n  build:" in content
+        assert "pytest api_gateway/tests strategy_engine/tests tui/tests" in content
+        assert "gradlew" not in content
+        assert "android" not in content
+        assert "summarize-unit-tests" not in content
+
+    def test_dev_test_workflow_no_jdk(self):
+        """Scenario 3: .github/workflows/dev-test.yml has no dead-weight JDK setup."""
+        dev_test_yml = REPO_ROOT / ".github" / "workflows" / "dev-test.yml"
+        assert dev_test_yml.exists(), f"dev-test.yml should exist at {dev_test_yml}"
+        content = dev_test_yml.read_text(encoding="utf-8")
+        assert "setup-java" not in content
+        assert "JDK" not in content
+
