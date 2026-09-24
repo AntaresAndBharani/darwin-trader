@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Comprehensive CLI Logging & Progress Observability (Issue #116)**:
+  - Added `rich>=13.0.0` dependency to `strategy_engine/requirements.txt` for ANSI terminal rendering.
+  - Implemented `_sync_historical_rates_detailed` in `strategy_engine/mt5_connector.py` returning `(bars, count, error_reason)` while preserving the public 2-tuple `sync_historical_rates` and `List[HistoricalBar] | None` `get_historical_rates` interfaces.
+  - Augmented `MT5Connector.sync_historical_batch` with `progress_callback` telemetry, stopwatch starting post-semaphore acquisition, local per-worker failure reason isolation without reading shared `connector.last_error`, and defensive try/except callback execution.
+  - Implemented `setup_cli_logging` in `strategy_engine/cli.py` configuring `"strategy_engine"` logger idempotently writing to `stderr` with `propagate=False`, `[WARN]` formatting, and automatic handler cleanup across sequential invocations.
+  - Added shared parent parser with `default=argparse.SUPPRESS` for `-v`/`--verbose` (DEBUG) and `-q`/`--quiet` (WARNING) across all subcommands (`sync-history`, `purge-history`, `committee`) with fail-fast mutual exclusion exiting with code 2.
+  - Implemented dual-mode progress engine rendering Rich animated progress on `stderr` during interactive TTY sessions (or `--force-terminal`) and deterministic 10% decile milestone logging on `stderr` during headless non-interactive runs, while preserving stdout contract purity.
+  - Added audit telemetry to `purge-history` on `stderr` tracking database path, target symbol, timeframe, and duration.
+  - Added comprehensive automated test suite `TestCliLoggingAndObservability` in `strategy_engine/tests/test_cli_history.py` covering Gherkin Scenarios 1–8.
+
 - **TUI Asset Explorer Metrics Drawer & Debounced Interaction (Issue #111, Parent #108)**:
   - Added consolidated `AssetMetricsResponse` model and updated `get_asset_metrics` in `tui/api_client.py` for asynchronous retrieval of institutional microstructure, volatility, and Kalman dynamic beta metrics.
   - Implemented collapsible metrics drawer enhancements in `tui/screens/asset_explorer_modal.py` with `[I]` toggle, amber degradation badges for uncached/insufficient benchmark states, synchronous loading label, 150ms debouncing, and stale response discard token guard.

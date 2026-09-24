@@ -3,6 +3,8 @@ Unit and integration tests for CLI sync-history and purge-history commands.
 Covers Gherkin scenarios for Issue #93 (Slice 1) and Issue #94 (Slice 2) of Parent #92.
 """
 import asyncio
+import json
+import logging
 import pytest
 from unittest.mock import patch
 
@@ -634,3 +636,299 @@ class TestCliHistoryGranularPurge:
         deleted = temp_db.clear_rates(symbols=["TEST"], timeframe="ALL")
         assert deleted == 5
         assert temp_db.get_total_bars("TEST", "D1") == 0
+
+
+class TestCliLoggingAndObservability:
+    """Comprehensive test suite for Issue #116: CLI Logging & Progress Observability (Scenarios 1-8)."""
+
+    def test_scenario_1_verbose_flag_before_subcommand(self, temp_db, capsys):
+        """
+        Scenario 1: -v placed before subcommand configures logger to DEBUG on stderr,
+        emitting connector initialization, worker semaphore acquisition, and timeframe upserts.
+        """
+        db_path = temp_db.db_path
+        rc = cli_main([
+            "-v",
+            "sync-history",
+            "--symbol", "AAPL",
+            "--db-path", db_path,
+        ])
+        assert rc == 0
+        captured = capsys.readouterr()
+        err = captured.err
+        assert "[DEBUG]" in err
+        assert "Connector initialized:" in err
+        assert "semaphore for symbol 'AAPL'" in err
+        assert "Upserted 100 bars for AAPL" in err
+        assert "Batch sync finished: 1/1 completed, 0 failed." in captured.out
+
+    def test_scenario_1_verbose_flag_after_subcommand(self, temp_db, capsys):
+        """
+        Scenario 1: --verbose placed after subcommand configures logger to DEBUG on stderr.
+        """
+        db_path = temp_db.db_path
+        rc = cli_main([
+            "sync-history",
+            "--symbol", "AAPL",
+            "--verbose",
+            "--db-path", db_path,
+        ])
+        assert rc == 0
+        captured = capsys.readouterr()
+        err = captured.err
+        assert "[DEBUG]" in err
+        assert "Connector initialized:" in err
+        assert "semaphore for symbol 'AAPL'" in err
+        assert "Upserted 100 bars for AAPL" in err
+
+    def test_scenario_1_quiet_flag_suppresses_info_progress(self, temp_db, capsys):
+        """
+        Scenario 1: -q/--quiet sets logger to WARNING on stderr, suppressing INFO progress messages.
+        """
+        db_path = temp_db.db_path
+        rc = cli_main([
+            "-q",
+            "sync-history",
+            "--symbol", "AAPL",
+            "--db-path", db_path,
+        ])
+        assert rc == 0
+        captured = capsys.readouterr()
+        err = captured.err
+        assert "[INFO]" not in err
+        assert "[DEBUG]" not in err
+        assert "Synchronizing" not in err
+        assert "milestone" not in err
+        assert "Batch sync finished: 1/1 completed, 0 failed." in captured.out
+
+        # Also verify --quiet placed after subcommand
+        rc2 = cli_main([
+            "sync-history",
+            "--symbol", "AAPL",
+            "--quiet",
+            "--db-path", db_path,
+        ])
+        assert rc2 == 0
+        err2 = capsys.readouterr().err
+        assert "[INFO]" not in err2
+        assert "[DEBUG]" not in err2
+
+    def test_scenario_1_mutual_exclusion_fails_fast_with_code_2(self, capsys):
+        """
+        Scenario 1: Mutually exclusive -v and -q in either order or split across subcommands
+        fails fast with exit code 2 and outputs an error to stderr.
+        """
+        # Combination 1: -v before, -q after
+        rc1 = cli_main(["-v", "sync-history", "-q", "--symbol", "AAPL"])
+        assert rc1 == 2
+        err1 = capsys.readouterr().err
+        assert "Error: -v/--verbose and -q/--quiet are mutually exclusive." in err1
+
+        # Combination 2: -q before, -v after
+        rc2 = cli_main(["-q", "sync-history", "-v", "--symbol", "AAPL"])
+        assert rc2 == 2
+        err2 = capsys.readouterr().err
+        assert "Error: -v/--verbose and -q/--quiet are mutually exclusive." in err2
+
+        # Combination 3: Both after subcommand
+        rc3 = cli_main(["sync-history", "-v", "-q", "--symbol", "AAPL"])
+        assert rc3 == 2
+        err3 = capsys.readouterr().err
+        assert "Error: -v/--verbose and -q/--quiet are mutually exclusive." in err3
+
+        # Combination 4: Both before subcommand
+        rc4 = cli_main(["-v", "-q", "sync-history", "--symbol", "AAPL"])
+        assert rc4 == 2
+        err4 = capsys.readouterr().err
+        assert "Error: -v/--verbose and -q/--quiet are mutually exclusive." in err4
+
+    def test_scenario_2_interactive_rich_progress_on_stderr(self, temp_db, capsys):
+        """
+        Scenario 2: Real-Time Interactive Progress Tracking on Stderr.
+        When force_terminal=True and HAS_RICH is True, renders a Rich progress bar
+        displaying total completed assets, remaining assets, elapsed time, and ingestion rate (bars/s)
+        strictly to stderr, while stdout receives only the legacy final summary line.
+        """
+        db_path = temp_db.db_path
+        rc = cli_main(
+            ["sync-history", "--symbol", "AAPL,MSFT", "--db-path", db_path],
+            force_terminal=True,
+        )
+        assert rc == 0
+        captured = capsys.readouterr()
+        # Verify stdout purity
+        assert captured.out == "Batch sync finished: 2/2 completed, 0 failed. Total bars committed: 200.\n"
+        # Verify stderr Rich telemetry fields
+        err = captured.err
+        assert "completed" in err
+        assert "remaining" in err
+        assert "bars/s" in err
+        assert "AAPL" in err
+        assert "MSFT" in err
+
+    def test_scenario_3_non_interactive_headless_decile_milestones(self, temp_db, capsys):
+        """
+        Scenario 3: Non-Interactive Headless Fallback with Deterministic Milestones.
+        When sys.stderr.isatty() is False, logs deterministic milestone lines to stderr
+        whenever done assets cross each 10% boundary of total assets (10%, 20%, ..., 100%),
+        emitting no ANSI control characters, and keeping stdout clean.
+        """
+        db_path = temp_db.db_path
+        symbols = [f"SYM{i:02d}" for i in range(1, 26)]
+        rc = cli_main([
+            "sync-history",
+            "--symbol", ",".join(symbols),
+            "--db-path", db_path,
+        ])
+        assert rc == 0
+        captured = capsys.readouterr()
+        err = captured.err
+        # Verify no ANSI escape control characters
+        assert "\x1b[" not in err
+        # Verify decile milestones
+        for pct in (10, 20, 30, 40, 50, 60, 70, 80, 90, 100):
+            assert f"Sync progress milestone: {pct}%" in err
+        # Verify stdout purity
+        assert captured.out == "Batch sync finished: 25/25 completed, 0 failed. Total bars committed: 2500.\n"
+
+    def test_scenario_3_headless_milestone_with_partial_failure(self, temp_db, capsys):
+        """
+        Scenario 3: Always emits final 100% milestone when done == total, even if some assets failed.
+        """
+        db_path = temp_db.db_path
+        symbols = [f"SYM{i:02d}" for i in range(1, 10)] + ["DELISTED_FAIL"]
+        rc = cli_main([
+            "sync-history",
+            "--symbol", ",".join(symbols),
+            "--db-path", db_path,
+        ])
+        assert rc == 2
+        captured = capsys.readouterr()
+        err = captured.err
+        assert "Sync progress milestone: 100%" in err
+        assert "Warning: Partial sync completed (9/10). Failed symbols: DELISTED_FAIL" in captured.out
+
+    def test_scenario_4_concurrency_safe_diagnostic_warnings(self, temp_db, capsys):
+        """
+        Scenario 4: Concurrency-Safe Diagnostic Visibility for Delisted / Failed Symbols.
+        Each worker generates its failure reason locally without reading shared connector.last_error,
+        outputs distinct WARNING log to stderr identifying the failed symbol and failure reason,
+        and stdout receives the legacy partial failure line.
+        """
+        db_path = temp_db.db_path
+        rc = cli_main([
+            "sync-history",
+            "--symbol", "AAPL,DELISTED_1,DELISTED_2",
+            "--workers", "3",
+            "--db-path", db_path,
+        ])
+        assert rc == 2
+        captured = capsys.readouterr()
+        assert captured.out == "Warning: Partial sync completed (1/3). Failed symbols: DELISTED_1, DELISTED_2\n"
+        err = captured.err
+        assert "[WARN]" in err
+        assert "[DELISTED_1] Fetch failed:" in err
+        assert "[DELISTED_2] Fetch failed:" in err
+        assert "delisted or invalid" in err
+
+    def test_scenario_5_purge_history_audit_logging(self, temp_db, capsys):
+        """
+        Scenario 5: Purge History Audit Logging.
+        When purge-history is executed, logs database path, target symbol, and targeted timeframe
+        to stderr, while stdout receives the legacy line verbatim.
+        """
+        db_path = temp_db.db_path
+        # Populate AAPL first
+        cli_main(["sync-history", "--symbol", "AAPL", "-q", "--db-path", db_path])
+        capsys.readouterr()
+
+        rc = cli_main([
+            "purge-history",
+            "--symbol", "AAPL",
+            "--yes",
+            "--db-path", db_path,
+        ])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert captured.out == "Successfully purged 100 historical rate record(s).\n"
+        err = captured.err
+        assert "Purging historical rates:" in err
+        assert db_path in err
+        assert "AAPL" in err
+        assert "timeframe=all" in err
+        assert "Purge completed in" in err
+
+    def test_scenario_6_backward_compatibility_public_api(self, temp_db):
+        """
+        Scenario 6: Public method connector.sync_historical_rates returns a 2-tuple (bars, count)
+        matching its original signature.
+        """
+        config = StrategyConfig(mock_mode=True)
+        connector = MT5Connector(config)
+        connector.initialize()
+        res = connector.sync_historical_rates("AAPL", "D1", db=temp_db)
+        assert isinstance(res, tuple)
+        assert len(res) == 2
+        bars, count = res
+        assert isinstance(bars, list)
+        assert count == 100
+
+    def test_scenario_7_preservation_of_piped_machine_readable_output(self, temp_db, capsys):
+        """
+        Scenario 7: Preservation of Piped Machine-Readable Output (committee --format json).
+        When executed with -v, all diagnostic logs are directed strictly to stderr,
+        and stdout contains strictly valid JSON parseable by json.loads().
+        """
+        db_path = temp_db.db_path
+        cli_main(["sync-history", "--symbol", "AAPL,SPY", "-q", "--db-path", db_path])
+        capsys.readouterr()
+
+        rc = cli_main([
+            "-v",
+            "committee",
+            "AAPL",
+            "--format", "json",
+            "--db-path", db_path,
+        ])
+        assert rc == 0
+        captured = capsys.readouterr()
+        # Parse stdout JSON
+        data = json.loads(captured.out)
+        assert data["symbol"] == "AAPL"
+        assert "current_price" in data
+        assert "fibonacci_grid" in data
+        # Stderr received logs
+        assert captured.err != ""
+
+    def test_scenario_8_logger_setup_idempotency(self, temp_db, capsys):
+        """
+        Scenario 8: Logger Setup Idempotency Across In-Process Invocations.
+        Sequential main() calls reset handlers on "strategy_engine" idempotently,
+        preventing duplicate log lines and closed file errors.
+        """
+        db_path = temp_db.db_path
+        for _ in range(3):
+            rc = cli_main(["sync-history", "--symbol", "AAPL", "--db-path", db_path])
+            assert rc == 0
+            err = capsys.readouterr().err
+            # Count occurrence of the banner in stderr for this invocation
+            assert err.count("Synchronizing historical rates for 1 symbol(s)") == 1
+
+        engine_logger = logging.getLogger("strategy_engine")
+        assert len(engine_logger.handlers) == 1
+
+    def test_graceful_fallback_when_rich_unavailable(self, temp_db, monkeypatch, capsys):
+        """
+        Verifies that when HAS_RICH is False, the CLI gracefully falls back
+        to non-interactive decile milestones even if force_terminal=True.
+        """
+        db_path = temp_db.db_path
+        monkeypatch.setattr("strategy_engine.cli.HAS_RICH", False)
+        rc = cli_main(
+            ["sync-history", "--symbol", "AAPL,MSFT", "--db-path", db_path],
+            force_terminal=True,
+        )
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "Batch sync finished: 2/2 completed, 0 failed. Total bars committed: 200.\n" == captured.out
+        assert "Sync progress milestone: 100%" in captured.err
