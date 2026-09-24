@@ -3,11 +3,16 @@ SQLite Storage Layer for Historical Market Data (OHLCV).
 Operates in SQLite WAL mode with composite primary key (symbol, timeframe, time DESC) WITHOUT ROWID.
 Provides upsert semantics (INSERT OR REPLACE) and paginated queries.
 """
+from contextlib import contextmanager
+import logging
 import os
+import random
 import sqlite3
-from typing import List, Optional, Tuple, Union, Dict, Any
+import time
+from typing import List, Optional, Tuple, Union, Dict, Any, Generator
 from .models import HistoricalBar
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = os.path.join("data", "historical_rates.db")
 
@@ -22,15 +27,36 @@ class HistoricalRatesDB:
             os.makedirs(db_dir, exist_ok=True)
         self._init_db()
 
+    @contextmanager
+    def _connection(self) -> Generator[sqlite3.Connection, None, None]:
+        conn = sqlite3.connect(
+            self.db_path,
+            timeout=self.busy_timeout / 1000.0,
+            isolation_level=None,
+        )
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout};")
+            conn.execute("PRAGMA wal_autocheckpoint=10000;")
+            yield conn
+        finally:
+            conn.close()
+
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=self.busy_timeout / 1000.0)
+        conn = sqlite3.connect(
+            self.db_path,
+            timeout=self.busy_timeout / 1000.0,
+            isolation_level=None,
+        )
         conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute(f"PRAGMA busy_timeout={self.busy_timeout};")
+        conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout};")
+        conn.execute("PRAGMA wal_autocheckpoint=10000;")
         conn.row_factory = sqlite3.Row
         return conn
 
     def _init_db(self) -> None:
-        with self._get_connection() as conn:
+        with self._connection() as conn:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute(
                 """
@@ -48,6 +74,50 @@ class HistoricalRatesDB:
                 ) WITHOUT ROWID;
                 """
             )
+
+    def _execute_write(self, write_op: Any) -> Any:
+        max_retries = 5
+        base_delay = 0.025
+        for attempt in range(max_retries):
+            try:
+                with self._connection() as conn:
+                    conn.execute("BEGIN IMMEDIATE;")
+                    try:
+                        res = write_op(conn)
+                        conn.execute("COMMIT;")
+                        return res
+                    except Exception:
+                        try:
+                            conn.execute("ROLLBACK;")
+                        except Exception:
+                            pass
+                        raise
+            except sqlite3.OperationalError as exc:
+                err_name = getattr(exc, "sqlite_errorname", "") or ""
+                is_lock_err = (
+                    err_name.startswith(("SQLITE_BUSY", "SQLITE_LOCKED"))
+                    or "locked" in str(exc).lower()
+                    or "busy" in str(exc).lower()
+                )
+                if is_lock_err and attempt < max_retries - 1:
+                    jitter = random.uniform(0.005, 0.025)
+                    sleep_time = (base_delay * (2 ** attempt)) + jitter
+                    logger.debug(
+                        "Write retry attempt %d/%d due to %s: retrying in %.4fs",
+                        attempt + 1,
+                        max_retries,
+                        err_name or "SQLITE_BUSY",
+                        sleep_time,
+                    )
+                    time.sleep(sleep_time)
+                    continue
+                logger.debug(
+                    "Write failed (%s) on attempt %d/%d",
+                    err_name or "SQLITE_BUSY",
+                    attempt + 1,
+                    max_retries,
+                )
+                raise
 
     def insert_rates(self, rates: List[Union[HistoricalBar, Dict[str, Any], Tuple]]) -> int:
         """
@@ -87,7 +157,7 @@ class HistoricalRatesDB:
             elif isinstance(r, (tuple, list)):
                 rows.append(tuple(r))
 
-        with self._get_connection() as conn:
+        def _insert(conn: sqlite3.Connection) -> int:
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO rates (
@@ -96,14 +166,16 @@ class HistoricalRatesDB:
                 """,
                 rows,
             )
-        return len(rows)
+            return len(rows)
+
+        return self._execute_write(_insert)
 
     def get_latest_timestamp(self, symbol: str, timeframe: str = "D1") -> Optional[int]:
         """
         Returns the latest recorded timestamp (UNIX seconds) for a given symbol and timeframe,
         or None if no records exist.
         """
-        with self._get_connection() as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 "SELECT MAX(time) AS max_time FROM rates WHERE symbol = ? AND timeframe = ?;",
                 (symbol, timeframe),
@@ -117,7 +189,7 @@ class HistoricalRatesDB:
         """
         Returns the total number of bars recorded for a given symbol and timeframe.
         """
-        with self._get_connection() as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 "SELECT COUNT(*) AS cnt FROM rates WHERE symbol = ? AND timeframe = ?;",
                 (symbol, timeframe),
@@ -142,7 +214,7 @@ class HistoricalRatesDB:
             return [], total_bars
 
         order_clause = "DESC" if descending else "ASC"
-        with self._get_connection() as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 f"""
                 SELECT symbol, timeframe, time, open, high, low, close, tick_volume, spread
@@ -221,30 +293,33 @@ class HistoricalRatesDB:
             if not target_symbols:
                 return 0
 
-        with self._get_connection() as conn:
-            if target_symbols is None:
-                if norm_tf is None:
-                    cursor = conn.execute("DELETE FROM rates;")
-                else:
-                    cursor = conn.execute("DELETE FROM rates WHERE timeframe = ?;", (norm_tf,))
-            elif len(target_symbols) == 1:
-                if norm_tf is None:
-                    cursor = conn.execute("DELETE FROM rates WHERE symbol = ?;", (target_symbols[0],))
-                else:
-                    cursor = conn.execute(
-                        "DELETE FROM rates WHERE symbol = ? AND timeframe = ?;",
-                        (target_symbols[0], norm_tf),
-                    )
+        query: str
+        params: Tuple[Any, ...]
+        if target_symbols is None:
+            if norm_tf is None:
+                query = "DELETE FROM rates;"
+                params = ()
             else:
-                placeholders = ", ".join("?" for _ in target_symbols)
-                if norm_tf is None:
-                    cursor = conn.execute(
-                        f"DELETE FROM rates WHERE symbol IN ({placeholders});",
-                        tuple(target_symbols),
-                    )
-                else:
-                    cursor = conn.execute(
-                        f"DELETE FROM rates WHERE symbol IN ({placeholders}) AND timeframe = ?;",
-                        (*target_symbols, norm_tf),
-                    )
+                query = "DELETE FROM rates WHERE timeframe = ?;"
+                params = (norm_tf,)
+        elif len(target_symbols) == 1:
+            if norm_tf is None:
+                query = "DELETE FROM rates WHERE symbol = ?;"
+                params = (target_symbols[0],)
+            else:
+                query = "DELETE FROM rates WHERE symbol = ? AND timeframe = ?;"
+                params = (target_symbols[0], norm_tf)
+        else:
+            placeholders = ", ".join("?" for _ in target_symbols)
+            if norm_tf is None:
+                query = f"DELETE FROM rates WHERE symbol IN ({placeholders});"
+                params = tuple(target_symbols)
+            else:
+                query = f"DELETE FROM rates WHERE symbol IN ({placeholders}) AND timeframe = ?;"
+                params = (*target_symbols, norm_tf)
+
+        def _clear(conn: sqlite3.Connection) -> int:
+            cursor = conn.execute(query, params)
             return cursor.rowcount
+
+        return self._execute_write(_clear)

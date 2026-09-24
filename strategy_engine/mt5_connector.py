@@ -849,23 +849,30 @@ class MT5Connector:
                 fail_reason: Optional[str] = None
                 bars_committed = 0
                 for tf in target_tfs:
-                    if hasattr(self.sync_historical_rates, "assert_called"):
-                        bars, count = await asyncio.to_thread(
-                            self.sync_historical_rates,
-                            symbol=sym,
-                            timeframe=tf,
-                            fresh=fresh,
-                            db=db,
-                        )
-                        err = f"Fetch failed for {sym} [{tf}]" if bars is None else None
-                    else:
-                        bars, count, err = await asyncio.to_thread(
-                            self._sync_historical_rates_detailed,
-                            symbol=sym,
-                            timeframe=tf,
-                            fresh=fresh,
-                            db=db,
-                        )
+                    try:
+                        if hasattr(self.sync_historical_rates, "assert_called"):
+                            bars, count = await asyncio.to_thread(
+                                self.sync_historical_rates,
+                                symbol=sym,
+                                timeframe=tf,
+                                fresh=fresh,
+                                db=db,
+                            )
+                            err = f"Fetch failed for {sym} [{tf}]" if bars is None else None
+                        else:
+                            bars, count, err = await asyncio.to_thread(
+                                self._sync_historical_rates_detailed,
+                                symbol=sym,
+                                timeframe=tf,
+                                fresh=fresh,
+                                db=db,
+                            )
+                    except Exception as exc:
+                        sym_failed = True
+                        fail_reason = str(exc) or f"Exception during sync: {exc}"
+                        logger.debug("[%s] Exception during sync: %s", sym, exc, exc_info=True)
+                        break
+
                     if bars is None:
                         # Delisted or unavailable: fast-fail, skip remaining timeframes
                         sym_failed = True
