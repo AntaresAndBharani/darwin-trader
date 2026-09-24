@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed
+- **Android Codebase & Legacy Mobile Scripts Decommissioning (Issue #98, Parent #97)**:
+  - Removed entire Android client application source code, Gradle build system, and JUnit test suites under `android/`.
+  - Removed Maestro E2E test flows, test mapping, and flow configurations under `e2e/`.
+  - Removed local test build and APK summary directory `local_test/`.
+  - Removed obsolete mobile test automation scripts `scripts/run-e2e-tests.ps1`, `scripts/post-e2e-evidence.ps1`, and `scripts/summarize-unit-tests.ps1`.
+  - Removed obsolete Android production release workflow `.github/workflows/release.yml`.
+  - Added acceptance criteria test suite in `strategy_engine/tests/test_mobile_decommission.py`.
+
 ### Fixed
 - **TUI HistoricalDataModal Layout Flex Alignment**:
   - Added explicit `width: auto` to `.control-label`, `#btn-fresh-restart`, `#simulation-badge`, and `#footer-status` in `tui/screens/historical_data_modal.py` to prevent flex layout collapse in Textual when `#footer-status` is empty.
