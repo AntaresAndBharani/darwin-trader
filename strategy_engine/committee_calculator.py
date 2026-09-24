@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from .historical_db import HistoricalRatesDB
+from .indicators import compute_kalman_dynamic_beta
 from .models import (
     HistoricalBar,
     HistoricalDataNotFoundError,
@@ -139,18 +140,25 @@ def compute_benchmark_beta(
     symbol: str,
     asset_bars: List[HistoricalBar],
     benchmark_symbol: str = "SPY",
+    benchmark_bars: Optional[List[HistoricalBar]] = None,
 ) -> Tuple[Optional[float], Optional[float], List[str]]:
     """
     Calculates asset beta vs benchmark using inner-join on daily timestamps.
     Enforces <20 overlap guard and missing benchmark detection.
     """
     flags: List[str] = []
-    spy_raw, spy_total = db.get_rates(benchmark_symbol, timeframe="D1", limit=250, descending=True)
-    if spy_total == 0 or not spy_raw:
-        flags.append("[BENCHMARK: UNCACHED (STANDALONE REGIME)]")
-        return None, None, flags
+    if benchmark_bars is None:
+        spy_raw, spy_total = db.get_rates(benchmark_symbol, timeframe="D1", limit=250, descending=True)
+        if spy_total == 0 or not spy_raw:
+            flags.append("[BENCHMARK: UNCACHED (STANDALONE REGIME)]")
+            return None, None, flags
+        spy_bars = list(reversed(spy_raw))
+    else:
+        if not benchmark_bars:
+            flags.append("[BENCHMARK: UNCACHED (STANDALONE REGIME)]")
+            return None, None, flags
+        spy_bars = benchmark_bars
 
-    spy_bars = list(reversed(spy_raw))
     asset_map = {b.time: b.close for b in asset_bars}
     spy_map = {b.time: b.close for b in spy_bars}
     common_times = sorted(set(asset_map.keys()) & set(spy_map.keys()))
@@ -245,9 +253,28 @@ class CommitteeCalculator:
         vp_bars = bars_h1 if bars_h1 else bars_d1
         vpoc, hvn, lvn = compute_volume_profile(vp_bars, bins=50)
 
+        # Single hoisted benchmark fetch (SPY)
+        spy_raw, spy_total = self.db.get_rates(benchmark_symbol, timeframe="D1", limit=250, descending=True)
+        spy_bars = list(reversed(spy_raw)) if (spy_total > 0 and spy_raw) else []
+
         # Benchmark Beta & RS
-        beta, rs, bench_flags = compute_benchmark_beta(self.db, symbol, bars_d1, benchmark_symbol=benchmark_symbol)
+        beta, rs, bench_flags = compute_benchmark_beta(
+            self.db, symbol, bars_d1, benchmark_symbol=benchmark_symbol, benchmark_bars=spy_bars
+        )
         data_flags.extend(bench_flags)
+
+        # Kalman Filter Dynamic Beta
+        kalman_res = compute_kalman_dynamic_beta(bars_d1, spy_bars)
+        data_flags.extend(kalman_res.data_flags)
+
+        # Telemetry flag deduplication preserving order
+        seen_flags = set()
+        deduped_flags: List[str] = []
+        for flag in data_flags:
+            if flag not in seen_flags:
+                seen_flags.add(flag)
+                deduped_flags.append(flag)
+        data_flags = deduped_flags
 
         return CommitteeContext(
             symbol=symbol,
@@ -271,6 +298,9 @@ class CommitteeCalculator:
             benchmark_symbol=benchmark_symbol,
             benchmark_beta=beta,
             relative_strength=rs,
+            kalman_beta=round(float(kalman_res.current_beta), 4) if kalman_res.current_beta is not None else None,
+            kalman_alpha=round(float(kalman_res.current_alpha), 4) if kalman_res.current_alpha is not None else None,
+            kalman_trend=kalman_res.kalman_trend,
             data_flags=data_flags,
         )
 

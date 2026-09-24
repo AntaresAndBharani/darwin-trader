@@ -390,3 +390,58 @@ class TestDeterministicCommitteeCalculator:
         vpoc, hvn, lvn = compute_volume_profile(bars, bins=50)
         assert vpoc is not None
         assert len(hvn) > 0
+
+    def test_scenario_3_uncached_benchmark_and_flag_deduplication(self, temp_db):
+        """
+        Scenario 3: Graceful Invariant on Uncached Benchmark & Telemetry Flag Deduplication.
+        Given an asset symbol "NVDA" with 250 bars in SQLite storage and an uncached benchmark "SPY" (0 bars)
+        When compute_kalman_dynamic_beta is called via the committee calculator
+        Then it returns kalman_beta = None, benchmark_beta = None
+        And appends the data flag "[BENCHMARK: UNCACHED (STANDALONE REGIME)]" exactly once
+        And asserts data_flags.count("[BENCHMARK: UNCACHED (STANDALONE REGIME)]") == 1.
+        """
+        bars_nvda = _generate_bars("NVDA", 250, timeframe="D1", start_time=1700000000, base_price=120.0)
+        temp_db.insert_rates(bars_nvda)
+
+        calc = CommitteeCalculator(db=temp_db)
+        ctx = calc.calculate("NVDA", benchmark_symbol="SPY", now=bars_nvda[-1].time + 86400)
+
+        assert ctx.kalman_beta is None
+        assert ctx.kalman_alpha is None
+        assert ctx.benchmark_beta is None
+        assert "[BENCHMARK: UNCACHED (STANDALONE REGIME)]" in ctx.data_flags
+        assert ctx.data_flags.count("[BENCHMARK: UNCACHED (STANDALONE REGIME)]") == 1
+
+    def test_committee_calculator_kalman_integration_and_overlap_deduplication(self, temp_db):
+        """
+        Verifies CommitteeContext populates lean Kalman scalars (kalman_beta, kalman_alpha, kalman_trend)
+        and deduplicates [BENCHMARK: INSUFFICIENT_OVERLAP] flag when overlap < 20 bars.
+        """
+        base_time = 1700000000
+        bars_nvda = _generate_bars("NVDA", 50, timeframe="D1", start_time=base_time, base_price=120.0)
+        temp_db.insert_rates(bars_nvda)
+
+        # 1. Insufficient overlap (< 20 bars) -> deduplicated flag
+        bars_spy_short = _generate_bars("SPY", 10, timeframe="D1", start_time=bars_nvda[-10].time, base_price=450.0)
+        temp_db.insert_rates(bars_spy_short)
+
+        calc = CommitteeCalculator(db=temp_db)
+        ctx_short = calc.calculate("NVDA", benchmark_symbol="SPY", now=bars_nvda[-1].time + 86400)
+        assert ctx_short.kalman_beta is None
+        assert ctx_short.benchmark_beta is None
+        assert ctx_short.data_flags.count("[BENCHMARK: INSUFFICIENT_OVERLAP]") == 1
+
+        # 2. Sufficient overlap (50 bars) -> lean Kalman scalars populated
+        temp_db.clear_rates("SPY")
+        bars_spy_full = _generate_bars("SPY", 50, timeframe="D1", start_time=base_time, base_price=450.0)
+        temp_db.insert_rates(bars_spy_full)
+
+        ctx_full = calc.calculate("NVDA", benchmark_symbol="SPY", now=bars_nvda[-1].time + 86400)
+        assert ctx_full.kalman_beta is not None
+        assert isinstance(ctx_full.kalman_beta, float)
+        assert ctx_full.kalman_alpha is not None
+        assert isinstance(ctx_full.kalman_alpha, float)
+        assert ctx_full.kalman_trend in ("EXPANDING", "CONTRACTING", "STABLE")
+        assert ctx_full.benchmark_beta is not None
+        assert ctx_full.data_flags.count("[BENCHMARK: INSUFFICIENT_OVERLAP]") == 0
+        assert ctx_full.data_flags.count("[BENCHMARK: UNCACHED (STANDALONE REGIME)]") == 0
