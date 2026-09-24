@@ -308,6 +308,30 @@ class CommitteeContext(BaseModel):
     benchmark_symbol: str = "SPY"
     benchmark_beta: Optional[float] = None
     relative_strength: Optional[float] = None
+    kalman_beta: Optional[float] = None
+    kalman_alpha: Optional[float] = None
+    kalman_trend: Optional[str] = None
+    data_flags: List[str] = Field(default_factory=list)
+
+
+class KalmanBetaResult(BaseModel):
+    current_beta: Optional[float] = None
+    current_alpha: Optional[float] = None
+    kalman_trend: Optional[str] = None
+    prediction_error_variance: Optional[float] = None
+    beta_trajectory: List[float] = Field(default_factory=list)
+    data_flags: List[str] = Field(default_factory=list)
+
+
+class AssetMetricsResponse(BaseModel):
+    symbol: str
+    ols_beta: Optional[float] = None
+    relative_strength: Optional[float] = None
+    kalman_beta: Optional[float] = None
+    kalman_alpha: Optional[float] = None
+    kalman_trend: Optional[str] = None
+    common_overlap_bars: int = 0
+    beta_trajectory: List[float] = Field(default_factory=list)
     data_flags: List[str] = Field(default_factory=list)
 
 

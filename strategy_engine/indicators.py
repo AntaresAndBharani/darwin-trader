@@ -6,10 +6,11 @@ Pure mathematical operations (NumPy) for institutional microstructure and volati
 - 20-Day Rolling VWAP & Dispersion Bands
 - Roll Implicit Effective Bid-Ask Spread
 """
+import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
-from strategy_engine.models import InstitutionalMetrics
+from strategy_engine.models import InstitutionalMetrics, KalmanBetaResult
 
 
 class RollSpread(float):
@@ -303,3 +304,89 @@ def compute_asset_metrics(
         roll_spread_absolute=roll_abs,
         last_bar_time=last_time,
     )
+
+
+def compute_kalman_dynamic_beta(
+    asset_bars: Sequence[Any],
+    benchmark_bars: Sequence[Any],
+    q_alpha: float = 1e-5,
+    q_beta: float = 1e-4,
+    r_noise: float = 1e-3,
+    p0: float = 1.0,
+) -> KalmanBetaResult:
+    """
+    Computes Kalman Filter Dynamic Beta (beta_t) and Alpha (alpha_t) against a benchmark.
+    Uses pure scalar float Joseph-stabilized covariance recursion for zero-lag adaptation.
+    """
+    flags: List[str] = []
+    if benchmark_bars is None or len(benchmark_bars) == 0:
+        flags.append("[BENCHMARK: UNCACHED (STANDALONE REGIME)]")
+        return KalmanBetaResult(data_flags=flags)
+    if asset_bars is None or len(asset_bars) == 0:
+        flags.append("[BENCHMARK: INSUFFICIENT_OVERLAP]")
+        return KalmanBetaResult(data_flags=flags)
+
+    def _to_map(bars: Sequence[Any]) -> Dict[int, float]:
+        m: Dict[int, float] = {}
+        for idx, b in enumerate(_normalize_bars(bars)):
+            try:
+                m[int(_get_bar_field(b, "time", idx))] = float(_get_bar_field(b, "close", b))
+            except (ValueError, TypeError):
+                m[idx] = float("nan")
+        return m
+
+    asset_map, bench_map = _to_map(asset_bars), _to_map(benchmark_bars)
+    common_times = sorted(set(asset_map.keys()) & set(bench_map.keys()))
+    if len(common_times) < 20:
+        flags.append("[BENCHMARK: INSUFFICIENT_OVERLAP]")
+        return KalmanBetaResult(data_flags=flags)
+
+    asset_closes = [asset_map[t] for t in common_times]
+    bench_closes = [bench_map[t] for t in common_times]
+    if any(not (math.isfinite(p) and p > 0.0) for p in asset_closes + bench_closes):
+        flags.append("[DATA_CORRUPT: NON_POSITIVE_PRICES]")
+        return KalmanBetaResult(data_flags=flags)
+
+    r_asset = [math.log(asset_closes[i] / asset_closes[i - 1]) for i in range(1, len(asset_closes))]
+    r_bench = [math.log(bench_closes[i] / bench_closes[i - 1]) for i in range(1, len(bench_closes))]
+
+    a, b = 0.0, 1.0
+    p00, p01, p11 = float(p0), 0.0, float(p0)
+    beta_trajectory: List[float] = []
+    f_val = p00 + r_noise
+
+    for y, x in zip(r_asset, r_bench):
+        p00 += q_alpha
+        p11 += q_beta
+        v = y - (a + b * x)
+        f_val = p00 + 2.0 * x * p01 + (x * x) * p11 + r_noise
+        k0, k1 = (p00 + x * p01) / f_val, (p01 + x * p11) / f_val
+        a += k0 * v
+        b += k1 * v
+        beta_trajectory.append(b)
+
+        a00, a01, a10, a11 = 1.0 - k0, -k0 * x, -k1, 1.0 - k1 * x
+        m00, m01 = a00 * p00 + a01 * p01, a00 * p01 + a01 * p11
+        m10, m11 = a10 * p00 + a11 * p01, a10 * p01 + a11 * p11
+        p00 = m00 * a00 + m01 * a01 + (k0 * k0) * r_noise
+        p01 = 0.5 * (m00 * a10 + m01 * a11 + m10 * a00 + m11 * a01) + (k0 * k1) * r_noise
+        p11 = m10 * a10 + m11 * a11 + (k1 * k1) * r_noise
+
+    kalman_trend = "STABLE"
+    if len(beta_trajectory) >= 21:
+        delta_beta = beta_trajectory[-1] - beta_trajectory[-21]
+        if delta_beta > 0.05:
+            kalman_trend = "EXPANDING"
+        elif delta_beta < -0.05:
+            kalman_trend = "CONTRACTING"
+
+    return KalmanBetaResult(
+        current_beta=b,
+        current_alpha=a,
+        kalman_trend=kalman_trend,
+        prediction_error_variance=f_val,
+        beta_trajectory=beta_trajectory,
+        data_flags=flags,
+    )
+
+
