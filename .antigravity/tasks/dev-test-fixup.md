@@ -5,7 +5,7 @@ Design: ws-setups/graph-engineering/docs/dev-test-node.md
 Migrated (2026-08-26) from Step 3 of the merged `three-amigos-and-dev-test.md`
 Antigravity task to a local Fetch -> Act pipeline
 (`scripts/local-pipeline/run-three-amigos-and-dev-test.ps1`). Genuine multi-turn
-agentic work (reading the codebase, writing code, running Gradle/pytest/Maestro,
+agentic work (reading the codebase, writing code, running pytest,
 iterating on failures). The wrapper has already checked out the branch before
 invoking you.
 
@@ -29,12 +29,10 @@ Body:
 ## What to do
 
 1. Address every blocking item from the feedback above, following Darwin Trader
-   conventions across Android and Backend. Never weaken or delete an existing
+   conventions across Terminal UI and Backend. Never weaken or delete an existing
    test assertion to force a pass.
 2. Run test suites:
-   - Android Unit Tests: `cd android; .\gradlew.bat testSnapshotDebugUnitTest --no-daemon; cd ..`
-   - Python Backend Tests: `python -m pytest api_gateway/tests strategy_engine/tests`
-   - Delta E2E Tests: `.\scripts\run-e2e-tests.ps1 -Delta`
+   - Python Test Suite: `python -m pytest api_gateway/tests strategy_engine/tests tui/tests`
    - If tests fail, fix and re-run, up to 3 attempts total.
 3. **If tests pass:** commit, push to this same branch
    (`& C:\Users\rogal\workspaces\Set-GhToken-Antares.ps1; git push origin {{BRANCH_NAME}}`),

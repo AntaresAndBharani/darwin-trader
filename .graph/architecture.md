@@ -2,35 +2,28 @@
 
 ## System Overview & Technology Stack
 
-**Darwin Trader** (`AntaresAndBharani/darwin-trader`) is an enterprise-grade algorithmic trading platform engineered for MetaTrader 5 (MT5) with a modern Android companion application (Jetpack Compose), an asynchronous Terminal User Interface (Textual TUI), a high-performance Python quantitative strategy execution and backtesting engine, and a FastAPI gateway providing real-time 1Hz WebSocket telemetry streaming and REST controls.
+**Darwin Trader** (`AntaresAndBharani/darwin-trader`) is an enterprise-grade algorithmic trading platform engineered for MetaTrader 5 (MT5) with an asynchronous Terminal User Interface (Textual TUI), a high-performance Python quantitative strategy execution and backtesting engine, and a FastAPI gateway providing real-time 1Hz WebSocket telemetry streaming and REST controls.
 
 The platform is purpose-built to comply with **Darwinex Zero** institutional evaluation metrics, prioritizing capital preservation, strict daily drawdown constraints, dynamic volatility-adjusted position sizing, multi-asset taxonomy discovery, and algorithmic consistency to maximize the Darwinex D-Score.
 
 ```mermaid
 graph TD
-    subgraph PresentationTier ["Presentation Layer (Mobile, Terminal & API Clients)"]
-        subgraph AndroidClient ["Android Companion Client (android/)"]
-            ComposeUI["Jetpack Compose UI (ui.dashboard, ui.strategy, ui.account, ui.backtest)"]
-            ViewModels["Android ViewModels (UDF StateFlow & collectAsStateWithLifecycle)"]
-            RetrofitClient["Retrofit API Client & OkHttp WebSocket Bridge (data.api)"]
-            DomainUseCases["Domain Use Cases (domain.usecase: invoke() interactors)"]
-        end
-
+    subgraph PresentationTier ["Presentation Layer (Terminal UI & API Gateway)"]
         subgraph TuiClient ["Terminal User Interface Client (tui/)"]
             TextualApp["Textual TUI Application (tui.app: DarwinTraderApp)"]
             TuiScreens["Modal Screens (AssetExplorerModal, ConnectModal, ConfirmModal)"]
             TuiWidgets["Reactive Widgets (SummaryCards, StrategyPanel, PositionsTable, HeaderBar)"]
             TuiClientWrapper["DarwinApiClient (httpx.AsyncClient & Resilient Reconnect)"]
         end
-    end
 
-    subgraph GatewayTier ["Gateway & Communications Layer (api_gateway/)"]
-        FastApiApp["FastAPI Application Server (main.py, Uvicorn)"]
-        WsEndpoint["WebSocket 1Hz Push Stream (/ws/live)"]
-        StrategyRoutes["Strategy Control Router (/api/v1/strategy)"]
-        AccountRoutes["Account Telemetry Router (/api/v1/account)"]
-        AssetRoutes["Asset Discovery & Taxonomy Router (/api/v1/assets)"]
-        GatewayLock["Gateway State Synchronization Lock (_state_lock: threading.Lock)"]
+        subgraph GatewayTier ["Gateway & Communications Layer (api_gateway/)"]
+            FastApiApp["FastAPI Application Server (main.py, Uvicorn)"]
+            WsEndpoint["WebSocket 1Hz Push Stream (/ws/live)"]
+            StrategyRoutes["Strategy Control Router (/api/v1/strategy)"]
+            AccountRoutes["Account Telemetry Router (/api/v1/account)"]
+            AssetRoutes["Asset Discovery & Taxonomy Router (/api/v1/assets)"]
+            GatewayLock["Gateway State Synchronization Lock (_state_lock: threading.Lock)"]
+        end
     end
 
     subgraph StrategyTier ["Quantitative Strategy & Execution Engine (strategy_engine/)"]
@@ -49,17 +42,9 @@ graph TD
     end
 
     subgraph QualityTier ["Quality & Agentic Governance Subsystems"]
-        MaestroE2E["Maestro Declarative E2E Suites (e2e/flows: 01-05)"]
-        PytestSuite["Backend Pytest Suite (api_gateway/tests, strategy_engine/tests, tui/tests)"]
-        GradleUnit["Gradle JVM Test Suite (testSnapshotDebugUnitTest)"]
+        PytestSuite["Pytest Suite (api_gateway/tests, strategy_engine/tests, tui/tests)"]
         AgenticSDLC["5-Node Agentic SDLC (Architect, Three Amigos, Dev-Test, PR Review, Backlog)"]
     end
-
-    ComposeUI -->|User Actions & Intents| ViewModels
-    ViewModels -->|Executes Interactors| DomainUseCases
-    DomainUseCases -->|Data Contracts| RetrofitClient
-    RetrofitClient -->|REST API Calls & WebSocket Feed| FastApiApp
-    ViewModels -->|Collects UI StateFlow| ComposeUI
 
     TextualApp --> TuiScreens
     TextualApp --> TuiWidgets
@@ -88,42 +73,24 @@ graph TD
     Connector -->|Live Windows Execution (Win32 IPC)| LiveMT5
     Connector -->|Simulated Execution / Linux CI| MockMT5
 
-    QualityTier -.->|End-to-End Verification| AndroidClient
     QualityTier -.->|Service Testing| GatewayTier
     QualityTier -.->|Algorithmic Verification| StrategyTier
-    QualityTier -.->|Headless UI Pilot Testing| TuiClient
+    QualityTier -.->|UI Pilot Testing| TuiClient
 ```
 
 ### Technology Stack & Framework Specifications
 
 | Tier / Subsystem | Technology | Specification / Version | Architectural Role |
 |---|---|---|---|
-| **Android Language & Runtime** | Kotlin | `2.0.21` / JVM 17 (`compileOptions`, `kotlinOptions`) | Strongly-typed, functional, coroutine-driven Android application core |
-| **Android SDK Targets** | Android SDK | `minSdk 26`, `targetSdk 35`, `compileSdk 35` | Android 15 platform compliance with Android 8.0+ backwards compatibility |
-| **Android UI Toolkit** | Jetpack Compose | Compose BOM `2024.10.01`, Material 3 | Declarative, reactive, component-driven mobile interface |
-| **Android Navigation** | Navigation Compose | `2.8.4` (`androidx.navigation.compose`) | Declarative navigation routing, tab coordination, and screen backstack |
-| **Android Networking** | Retrofit & OkHttp | Retrofit `2.11.0`, OkHttp `4.12.0`, Gson Converter | REST API client and asynchronous JSON serialization over HTTP/1.1 & HTTP/2 |
-| **Android Concurrency** | Kotlin Coroutines & Flow | Lifecycle `2.8.7` (`lifecycle-runtime-compose`, `viewmodel-compose`) | Structured concurrency, lifecycle-aware reactive UI collection (`collectAsStateWithLifecycle`) |
+| **Terminal UI (TUI)** | Textual & Rich | Textual `>=0.70.0`, Rich `>=13.0.0` | Asynchronous, keyboard-driven ANSI dashboard with interactive modals and differential tables |
+| **Asynchronous HTTP Client** | HTTPX | HTTPX `>=0.24.0` | Asynchronous connection-pooled HTTP client with resilient retry and offline fallbacks |
 | **Backend Framework** | FastAPI & Uvicorn | FastAPI `>=0.100.0`, Uvicorn `>=0.22.0` | Asynchronous REST gateway, asset catalog routes, and 1Hz WebSockets push streaming |
 | **Data Validation & Schemas** | Pydantic | Pydantic v2 (`>=2.0.0`) | High-performance Rust-backed schema validation, serialization, and typing |
 | **Quantitative Computing** | Pandas & NumPy | Pandas `>=2.0.0`, NumPy `>=1.24.0` | Vectorized technical indicators, rolling series, and historical bar backtesting |
 | **Broker Integration** | MetaTrader 5 Python SDK | `MetaTrader5 >= 5.0.45` (Windows conditional) | Win32 IPC bridge to MT5 trading terminals (`terminal64.exe`) with error code translation |
-| **Terminal UI (TUI)** | Textual & Rich | Textual `>=0.70.0`, Rich `>=13.0.0` | Asynchronous, keyboard-driven ANSI dashboard with interactive modals and differential tables |
-| **Asynchronous HTTP Client** | HTTPX | HTTPX `>=0.24.0` | Asynchronous connection-pooled HTTP client with resilient retry and offline fallbacks |
-| **Android Build System** | Gradle Kotlin DSL | Android Gradle Plugin (AGP) `8.7.2`, Gradle Wrapper | Reproducible multi-flavor build pipelines, code generation, and keystore signing |
-| **Testing Infrastructure** | Pytest, JUnit, Maestro | Pytest `>=7.0.0`, JUnit `4.13.2`, Maestro CLI | Graph Engineering 5-pillar verification (Unit, Snapshot, Delta E2E, Visual, CI) |
+| **Testing Infrastructure** | Pytest | Pytest `>=7.0.0`, pytest-asyncio, pytest-randomly | Unit, integration, route validation, and headless TUI pilot testing |
 
-### Multi-Environment Packaging & Dual-Flavor Architecture
-
-The mobile application utilizes Gradle product flavors to support side-by-side deployment and safe verification against staging environments:
-
-1. **`prod` Flavor (`com.darwintrader.app`)**:
-   - Production trading client configured with app name **"Darwin Trader"**.
-   - Intended for production broker accounts (`Darwinex-Live`) with strict capital controls.
-2. **`snapshot` Flavor (`com.darwintrader.app.snapshot`)**:
-   - Pre-release CI/CD verification client configured with app name **"Darwin Trader Snapshot"**.
-   - Features a distinct package name, enabling simultaneous installation alongside `prod` on physical devices and emulators.
-   - Used by automated Maestro E2E test suites (`run-e2e-tests.ps1`) and GitHub Actions snapshot publishing.
+### Execution Modes & Simulation Architecture
 
 On the backend, execution mode is governed by `StrategyConfig.mock_mode`:
 - **Live Mode (`mock_mode = False`)**: Establishes live Win32 IPC with the MetaTrader 5 terminal process on Windows. Supports attaching to already-running terminal instances or initiating sessions with broker credentials.
@@ -133,21 +100,16 @@ On the backend, execution mode is governed by `StrategyConfig.mock_mode`:
 
 ## Layer Boundaries & Clean Architecture (Domain, Data, Presentation/UI separation of concerns)
 
-The Darwin Trader ecosystem enforces strict **Clean Architecture** boundaries and **Unidirectional Data Flow (UDF)**. Dependencies strictly point inward toward domain models and business invariants. Outer layers depend on inner abstractions; inner layers possess zero knowledge of outer frameworks, UI toolkits, or network transports.
+The Darwin Trader ecosystem enforces strict **Clean Architecture** boundaries and **Unidirectional Data Flow**. Dependencies strictly point inward toward domain models and business invariants. Outer layers depend on inner abstractions; inner layers possess zero knowledge of outer frameworks, UI toolkits, or network transports.
 
 ```mermaid
 graph RL
-    subgraph PresentationLayer ["Presentation Layer (Mobile UI, TUI, ViewModels, Routers)"]
-        ComposeScreens["Android Compose Screens (ui.dashboard, ui.strategy, etc.)"]
-        AndroidVMs["Android ViewModels (UDF StateFlows)"]
+    subgraph PresentationLayer ["Presentation Layer (TUI, Widgets, Screens, Routers)"]
         TuiApp["Textual TUI Widgets & Screens (tui/)"]
         FastApiRouters["FastAPI Routers (routes_strategy, routes_account, routes_assets)"]
     end
 
     subgraph DataLayer ["Data & Infrastructure Layer (Networking, Brokers, DTOs, Mappers)"]
-        RetrofitService["Retrofit ApiService (data.api)"]
-        DtoMappers["DTO Mappers: toDomain() (data.model)"]
-        AndroidRepos["Android Repository Implementations (data.repository)"]
         TuiApiClient["DarwinApiClient (tui.api_client)"]
         MT5Conn["MT5 Connector & Mock Engine (strategy_engine.mt5_connector)"]
         DoubleCheckCache["Double-Checked Locking Catalog Cache (_symbols_cache)"]
@@ -159,7 +121,6 @@ graph RL
         RiskRules["Risk Management Engine (risk_manager.py: RiskManager)"]
         StrategyAlgorithms["Strategy Base & Indicator Math (strategy_base.py, sample_strategy.py)"]
         BacktestCore["Quantitative Simulation Engine (backtester.py: Backtester)"]
-        DomainContracts["Android Domain Contracts (UseCases: invoke(), Repository Interfaces)"]
     end
 
     PresentationLayer -->|Invokes| DataLayer
@@ -186,12 +147,8 @@ The Domain layer is the heart of the platform. It defines enterprise trading mod
     - Pure mathematical, vectorized implementations of Exponential Moving Average (`calculate_ema`), Relative Strength Index (`calculate_rsi`), and Average True Range (`calculate_atr`).
   - **Quantitative Simulation Engine (`strategy_engine/backtester.py`)**:
     - Bar-by-bar historical backtesting simulation calculating equity curves, Win Rates, Profit Factors, and Maximum Drawdowns without network, disk, or broker dependencies.
-  - **Android Domain Contracts (`domain/`)**:
-    - Clean Kotlin domain models (`Account`, `Position`, `StrategyState`, `Asset`).
-    - Use Cases encapsulating single business actions following the `operator fun invoke()` pattern (`GetAccountTelemetryUseCase`, `ExecuteOrderUseCase`, `TriggerKillSwitchUseCase`, `AuthenticateAccountUseCase`).
-    - Repository interfaces (`AccountRepository`, `StrategyRepository`, `AssetRepository`).
 - **Architectural Invariants:**
-  - **Zero External Framework Dependencies**: The Python domain core must not import FastAPI, Uvicorn, or MetaTrader5. The Android domain core must not import Android SDK (`android.*`), Jetpack Compose, Retrofit, or Gson.
+  - **Zero External Framework Dependencies**: The Python domain core must not import FastAPI, Uvicorn, or MetaTrader5.
   - **Deterministic & Pure**: Indicator math and risk calculations must be pure functions with deterministic outputs for given inputs, enabling comprehensive unit testing without mocks.
 
 ### 2. Data & Infrastructure Layer
@@ -214,29 +171,17 @@ The Data layer bridges domain logic with external hardware, operating systems, a
   - **Configuration Infrastructure (`strategy_engine/config.py`)**:
     - Manages strategy parameters, indicator periods, broker server configurations, and credentials extracted from environment variables with safe defaults.
     - Implements safe parameter resetting (`reset_from`) using Pydantic model copying without touching private internals.
-  - **Mobile Networking & Data Mapping (`android/app/src/main/java/com/darwintrader/app/data/`)**:
-    - `ApiService`: Retrofit interface defining REST endpoints for account status, positions, telemetry, strategy commands, asset catalog, and Darwinex stats.
-    - DTO Serialization: Strongly-typed data transfer objects (`AccountInfo`, `Position`, `AccountConnectRequest`, `AccountConnectResponse`, `AssetInfo`).
-    - DTO Mappers: Pure extension functions (`toDomain()`) transforming network models into clean domain entities.
   - **Terminal Networking (`tui/api_client.py`)**:
     - `DarwinApiClient`: Manages an asynchronous HTTP client session (`httpx.AsyncClient`) with connection pooling, explicit keep-alive, extended action timeouts (15s for kill-switch/connect), and offline error translation.
 - **Architectural Invariants:**
   - Low-level network or broker exceptions must be captured and translated into domain status models (`ConnectionState.DISCONNECTED`, `ConnectionState.ERROR`) rather than bubbling unhandled to the presentation layer.
-  - All disk and network I/O must execute asynchronously or on designated background thread pools (`Dispatchers.IO` in Kotlin, `asyncio.to_thread` for blocking Win32 MT5 IPC in Python).
+  - All disk and network I/O must execute asynchronously or on designated background thread pools (`asyncio.to_thread` for blocking Win32 MT5 IPC in Python).
 
 ### 3. Presentation & UI Layer
 
 The Presentation layer renders telemetry, captures trader input, and dispatches trading commands:
 
 - **Responsibilities:**
-  - **Android Client (`android/app/src/main/java/com/darwintrader/app/ui/`)**:
-    - **Single-Activity Host (`MainActivity.kt`)**: Hosts the Compose `Scaffold`, top-level `NavigationBar`, and tab transitions.
-    - **Stateful Screens & Stateless Components**:
-      - `DashboardScreen`: Real-time telemetry cards (Equity, Balance, Floating PnL, D-Score), connection badges, strategy state pills, emergency action buttons (START, PAUSE, KILL SWITCH), and active positions list.
-      - `StrategyControlScreen`: Interactive inputs for trade risk percentage, daily drawdown cap, and magic numbers.
-      - `AccountSettingsScreen`: Broker server connection form, mock mode toggle, terminal executable path configuration, and inline troubleshooting guides.
-      - `BacktestScreen`: Quantitative simulation trigger, strategy summary, and metric indicators (Win Rate, Profit Factor, Max Drawdown).
-    - **Design System & Theming (`ui/theme/Theme.kt`)**: High-contrast trading color palette featuring Bright Trading Green (`#00E676`), Stop-Loss / Emergency Red (`#FFFF1744`), Professional Blue (`#2979FF`), Dark Navy Background (`#0F172A`), and Slate Surfaces (`#1E293B`).
   - **Terminal User Interface (`tui/`)**:
     - `DarwinTraderApp`: Textual application managing full-screen layouts, reactive message loops, keybindings (`F1`, `F2`/`C`, `F3`/`A`, `P`, `K`, `R`, `Q`), and modal dialogs.
     - `HeaderBar`: Top telemetry bar with dual-glyph accessibility badges (`[● CONNECTED]`, `[○ DISCONNECTED]`), latency metrics, and server info.
@@ -252,7 +197,7 @@ The Presentation layer renders telemetry, captures trader input, and dispatches 
     - `main.py`: WebSocket push streaming at 1Hz over `/ws/live`.
 - **Architectural Invariants:**
   - UI components must never instantiate broker SDKs or execute direct raw database queries.
-  - All UI state must be collected using lifecycle-safe primitives (`collectAsStateWithLifecycle()` in Compose) to eliminate background polling leaks.
+  - All UI state updates must be differential and non-blocking to prevent UI freezing during 1Hz stream processing.
 
 ---
 
@@ -264,54 +209,15 @@ The directory structure enforces strict modular separation by technical concern,
 darwin-trader/
 ├── .github/                                      # GitHub Actions CI/CD workflows and issue templates
 │   ├── ISSUE_TEMPLATE/                           # Issue templates (user-story.yml, subtask.yml)
-│   └── workflows/                                # CI workflows (build.yml, release.yml, e2e.yml)
+│   ├── workflows/                                # CI workflows (build.yml, dev-test.yml)
+│   └── workflows/prompts/                        # CI governance prompts
 ├── .graph/                                       # Living architecture specifications & local pipeline worktrees
 │   ├── architecture.md                           # Authoritative System Architecture & Living Engineering Standards
 │   └── worktrees/                                # Git worktrees for parallel agentic development and testing
-├── android/                                      # Android Companion Client (Jetpack Compose)
-│   ├── app/
-│   │   ├── build.gradle.kts                      # Application module build configuration, flavors, dependencies
-│   │   ├── debug.keystore                        # Standard debug keystore for local & CI signing
-│   │   ├── proguard-rules.pro                    # R8 / ProGuard optimization rules
-│   │   └── src/
-│   │       ├── main/
-│   │       │   ├── AndroidManifest.xml           # Application manifest, permissions (INTERNET, ACCESS_NETWORK_STATE)
-│   │       │   └── java/com/darwintrader/app/
-│   │       │       ├── MainActivity.kt           # Single Activity host with NavigationBar and Compose Scaffold
-│   │       │       ├── data/                     # Data layer (Networking, Models, Repositories, Mappers)
-│   │       │       │   ├── api/
-│   │       │       │   │   └── ApiService.kt     # Retrofit REST API interface definitions
-│   │       │       │   ├── model/
-│   │       │       │   │   └── Models.kt         # DTOs, network models, and connection badge helpers
-│   │       │       │   └── repository/           # Repository implementations (SSOT)
-│   │       │       ├── domain/                   # Domain layer (Pure Kotlin, zero Android imports)
-│   │       │       │   ├── model/                # Pure domain entities (Account, Position, Telemetry, Asset)
-│   │       │       │   ├── repository/           # Domain repository contracts (AccountRepository, StrategyRepository)
-│   │       │       │   └── usecase/              # Interactors with invoke() (GetTelemetryUseCase, ExecuteKillSwitchUseCase)
-│   │       │       └── ui/                       # Presentation layer (Compose screens, components, theme)
-│   │       │           ├── account/
-│   │       │           │   └── AccountSettingsScreen.kt # MT5 connection and credential configuration
-│   │       │           ├── backtest/
-│   │       │           │   └── BacktestScreen.kt # Backtesting simulation trigger and metrics display
-│   │       │           ├── dashboard/
-│   │       │           │   └── DashboardScreen.kt # Live financial telemetry, status badges, open positions
-│   │       │           ├── strategy/
-│   │       │           │   └── StrategyControlScreen.kt # Strategy risk parameters and configuration form
-│   │       │           ├── theme/
-│   │       │           │   └── Theme.kt          # Material 3 dark trading color scheme and typography
-│   │       │           └── viewmodels/           # ViewModels exposing UDF StateFlows
-│   │       └── test/java/com/darwintrader/app/   # JVM Unit Tests
-│   │           └── ModelsTest.kt                 # DTO serialization and badge text unit tests
-│   ├── gradle/
-│   │   └── libs.versions.toml                    # Version Catalog (AGP, Kotlin, Compose, Retrofit, OkHttp)
-│   ├── build.gradle.kts                          # Root build script with plugin declarations
-│   ├── gradle.properties                         # Global project configuration (JVM args, AndroidX flags)
-│   ├── gradlew.bat                               # Windows Gradle wrapper script
-│   └── settings.gradle.kts                       # Gradle project and repository settings
 ├── api_gateway/                                  # FastAPI Asynchronous Gateway
 │   ├── __init__.py                               # Package initialization
 │   ├── main.py                                   # FastAPI entrypoint, CORS configuration, and WebSocket stream
-│   ├── requirements.txt                          # Gateway runtime dependencies (fastapi, uvicorn, pydantic)
+│   ├── requirements.txt                          # Gateway runtime dependencies (fastapi, uvicorn, pydantic, textual)
 │   ├── routes_account.py                         # Account connection, telemetry, positions, and Darwinex stats
 │   ├── routes_assets.py                          # Asset taxonomy, discovery, search, and specification routes
 │   ├── routes_strategy.py                        # Strategy start, pause, stop, kill-switch, and config routes
@@ -322,6 +228,7 @@ darwin-trader/
 ├── strategy_engine/                              # Quantitative Strategy Engine & MT5 Integration
 │   ├── __init__.py                               # Package initialization
 │   ├── backtester.py                             # Bar-by-bar quantitative simulation engine
+│   ├── cli_history.py                            # CLI historical data sync and purge utilities
 │   ├── config.py                                 # Pydantic configuration model and environment loading
 │   ├── models.py                                 # Core trading models, signals, positions, assets, enums
 │   ├── mt5_connector.py                          # MetaTrader 5 Win32 IPC connector & platform mock engine
@@ -329,8 +236,11 @@ darwin-trader/
 │   ├── risk_manager.py                           # Darwinex Zero risk validation and dynamic lot sizing
 │   ├── sample_strategy.py                        # Reference quantitative strategy (EMA + RSI + ATR)
 │   ├── strategy_base.py                          # Abstract base strategy and vectorized indicator math
-│   └── tests/                                    # Strategy, risk, and connector test suites
+│   └── tests/                                    # Strategy, risk, connector, and governance test suites
 │       ├── test_assets_connector.py              # Thread-safe asset catalog and category filtering tests
+│       ├── test_cli_history.py                   # Parallel sync and granular purge tests
+│       ├── test_mobile_decommission.py           # Mobile decommission regression tests
+│       ├── test_pipeline_governance_alignment.py # Pipeline and governance alignment tests
 │       └── test_strategy.py                      # Unit tests for indicators, signals, risk caps, backtester
 ├── tui/                                          # Terminal User Interface Dashboard (Textual)
 │   ├── __init__.py                               # Package initialization
@@ -353,9 +263,6 @@ darwin-trader/
 ├── docs/                                         # Project documentation and visual artifacts
 │   ├── draft-requisites/                         # Implementation proposals, review logs, BDD specs
 │   └── screenshots/                              # Validated visual test evidence
-├── e2e/                                          # Declarative Maestro End-to-End Test Suite
-│   ├── flow-mapping.json                         # Mapping between test flows and application domains
-│   └── flows/                                    # Maestro YAML scenario scripts (01-05)
 ├── logs/                                         # Execution logs for local-pipeline tasks
 ├── scripts/                                      # Automation scripts, test runners, local pipeline
 │   ├── local-pipeline/                           # Antigravity / Task Scheduler local automation nodes
@@ -364,9 +271,7 @@ darwin-trader/
 │   │   ├── run-backlog-triage.ps1                # Local Backlog Triage node
 │   │   ├── run-pr-review.ps1                     # Local PR Review node
 │   │   └── run-three-amigos-and-dev-test.ps1     # Local Dev-Test & Three Amigos runner
-│   ├── post-e2e-evidence.ps1                     # PR sticky comment updater with test evidence
-│   ├── run-e2e-tests.ps1                         # Maestro E2E test execution engine
-│   └── summarize-unit-tests.ps1                  # Markdown test summary generator
+│   └── run-tui.ps1                               # Interactive TUI dashboard launcher script
 ├── CHANGELOG.md                                  # Keep a Changelog historical record
 ├── GEMINI.md                                     # Agent context, quick commands, and guidelines
 ├── pytest.ini                                    # Pytest configuration and path settings
@@ -375,127 +280,9 @@ darwin-trader/
 
 ---
 
-## Design Patterns, State Management & Dependency Injection
+## Design Patterns, State Management & Concurrency
 
-### 1. Unidirectional Data Flow (UDF) & Reactive StateFlow Pattern (Android)
-
-The presentation tier strictly adheres to the **Unidirectional Data Flow (UDF)** architecture:
-- **UI State**: ViewModels expose an immutable `StateFlow<UIState>` stream created using `stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), InitialState)`. The 5-second `WhileSubscribed` timeout preserves state across configuration changes (e.g. screen rotations) while pausing background network polling when the app is backgrounded.
-- **User Intent**: Composables capture user interactions and dispatch discrete events (e.g., `viewModel.triggerKillSwitch()`) to the ViewModel.
-- **State Collection**: Composables collect state strictly via `collectAsStateWithLifecycle()`, guaranteeing automatic subscription pausing aligned with Android lifecycle states.
-
-```kotlin
-// Modern UDF ViewModel pattern for Darwin Trader
-class DashboardViewModel(
-    private val getAccountTelemetryUseCase: GetAccountTelemetryUseCase,
-    private val triggerKillSwitchUseCase: TriggerKillSwitchUseCase
-) : ViewModel() {
-
-    val uiState: StateFlow<DashboardUiState> = getAccountTelemetryUseCase()
-        .map { telemetry -> DashboardUiState.Success(telemetry) }
-        .catch { error -> emit(DashboardUiState.Error(error.localizedMessage ?: "Unknown Error")) }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = DashboardUiState.Loading
-        )
-
-    fun onKillSwitchTriggered() {
-        viewModelScope.launch {
-            triggerKillSwitchUseCase()
-        }
-    }
-}
-```
-
-### 2. Stateful Container vs Stateless Presentation Composables Pattern
-
-To maximize previewability, automated UI testability, and separation of concerns, all screens follow the container/content separation:
-- **Stateful Route (`*Screen`)**: Responsible for injecting or retrieving the ViewModel, collecting `StateFlow`s with lifecycle awareness, and handling navigation callbacks.
-- **Stateless Content (`*Content`)**: Pure composable accepting pure data classes and emitting event lambdas. Contains zero references to ViewModels or network clients, enabling immediate rendering in `@Preview` and isolated Compose UI tests.
-
-```kotlin
-// 1. Stateful Container Composable
-@Composable
-fun DashboardScreen(
-    viewModel: DashboardViewModel = viewModel(),
-    onNavigateToSettings: () -> Unit = {}
-) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
-
-    DashboardContent(
-        state = state,
-        onStart = viewModel::startStrategy,
-        onPause = viewModel::pauseStrategy,
-        onKillSwitch = viewModel::onKillSwitchTriggered,
-        onSettingsClick = onNavigateToSettings
-    )
-}
-
-// 2. Stateless Presentation Composable
-@Composable
-fun DashboardContent(
-    state: DashboardUiState,
-    onStart: () -> Unit,
-    onPause: () -> Unit,
-    onKillSwitch: () -> Unit,
-    onSettingsClick: () -> Unit
-) {
-    Scaffold(
-        topBar = { /* Telemetry Header */ }
-    ) { padding ->
-        when (state) {
-            is DashboardUiState.Loading -> LoadingIndicator(Modifier.padding(padding))
-            is DashboardUiState.Success -> TelemetryDashboardView(state.data, onKillSwitch, Modifier.padding(padding))
-            is DashboardUiState.Error -> ErrorBanner(state.message, Modifier.padding(padding))
-        }
-    }
-}
-```
-
-### 3. Domain Use Case Invocation Pattern (`operator fun invoke()`)
-
-Business operations in the Android client are encapsulated in single-purpose Use Case interactors:
-- Each Use Case exposes a single public `operator fun invoke()` method.
-- Encapsulates domain business rules and coordinates multiple repositories if needed.
-- Enables easy unit testing by mocking only repository interfaces without framework mocks.
-
-```kotlin
-class TriggerKillSwitchUseCase(
-    private val strategyRepository: StrategyRepository
-) {
-    suspend operator fun invoke(): Result<Unit> {
-        return try {
-            strategyRepository.executeKillSwitch()
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-}
-```
-
-### 4. Repository Pattern & Single Source of Truth (SSOT) with DTO Mapping
-
-Repositories mediate between network APIs, WebSockets, and local state:
-- All data access is routed through repository implementations (`AccountRepositoryImpl`, `StrategyRepositoryImpl`, `AssetRepositoryImpl`).
-- Repositories encapsulate network caching, offline mock fallbacks, and data transformation from network DTOs to clean domain models via mapper extension functions (`dto.toDomain()`).
-- Upstream consumers (ViewModels and Use Cases) remain decoupled from underlying transport details (Retrofit vs OkHttp WebSockets).
-
-```kotlin
-// DTO to Domain Mapper pattern
-fun AccountInfoDto.toDomain(): Account = Account(
-    login = login,
-    balance = balance,
-    equity = equity,
-    floatingPnl = profit,
-    dScore = dScore ?: 0.0,
-    server = server,
-    isDemo = tradeMode.equals("DEMO", ignoreCase = true)
-)
-```
-
-### 5. Concurrency & Dual-Lock Synchronization Pattern (Gateway & Strategy Engine)
+### 1. Concurrency & Dual-Lock Synchronization Pattern (Gateway & Strategy Engine)
 
 Algorithmic trading demands strict concurrency guarantees to prevent race conditions during order dispatch, position closure, asset discovery, and configuration updates:
 
@@ -530,7 +317,7 @@ async def connect_account(request: AccountConnectRequest) -> AccountConnectRespo
         return AccountConnectResponse(status="CONNECTED", message=message, account_info=acc)
 ```
 
-### 6. Double-Checked Locking & Shallow Snapshot Caching Pattern (Asset Catalog)
+### 2. Double-Checked Locking & Shallow Snapshot Caching Pattern (Asset Catalog)
 
 Retrieving thousands of symbol specifications from MetaTrader 5 over Win32 IPC is computationally expensive and subject to dictionary mutation race conditions during concurrent HTTP queries:
 - **Double-Checked Locking**: The catalog cache TTL is checked before and after acquiring `self._lock`, avoiding redundant IPC queries across threads.
@@ -561,7 +348,7 @@ def get_available_assets(self, category: Optional[str] = None, search: Optional[
     return results
 ```
 
-### 7. Hardware Abstraction & Mock Simulation Strategy (Platform-Independence Pattern)
+### 3. Hardware Abstraction & Mock Simulation Strategy (Platform-Independence Pattern)
 
 Proprietary MetaTrader 5 Python bindings only execute on Windows operating systems with an installed `terminal64.exe` client. To achieve cross-platform portability across macOS, Linux development environments, and GitHub Actions CI containers:
 - `MT5Connector` inspects `platform.system() == "Windows"` and safely handles `ImportError` on non-Windows platforms.
@@ -569,7 +356,7 @@ Proprietary MetaTrader 5 Python bindings only execute on Windows operating syste
 - Simulates realistic ticket generation (`_mock_ticket_counter`), spreads, margin allocation (`$200.00` per position), floating PnL calculation, and a deterministic 8-symbol mock catalog fixture (`AMZN`, `NVDA`, `MSFT`, `PM`, `AAPL`, `SPY`, `QQQ`, `EURUSD`).
 - Guarantees 100% test coverage and CI verification on headless Ubuntu GitHub Actions runners.
 
-### 8. Emergency Kill-Switch Pattern (Fail-Safe Portfolio Liquidation)
+### 4. Emergency Kill-Switch Pattern (Fail-Safe Portfolio Liquidation)
 
 In automated algorithmic trading, the emergency kill switch is the most critical safety mechanism:
 - **Idempotent Multi-Ticket Liquidation**: Sequentially loops through all active positions, issuing closing deal orders (`TRADE_ACTION_DEAL` with inverse order types) directly to the broker.
@@ -577,7 +364,7 @@ In automated algorithmic trading, the emergency kill switch is the most critical
 - **Zero-Position Safety Guard**: If invoked when zero positions are open, the system transitions strategy status to `PAUSED` without dispatching redundant network cancellation orders, avoiding broker rejection errors.
 - **Fail-Safe State Transition**: Immediately halts strategy signal evaluation by forcing `StrategyStatus.PAUSED`, preventing new orders from entering the market while liquidation is in flight.
 
-### 9. Quantitative Signal-Driven Trading Pattern (Strategy Base & Risk Decorator)
+### 5. Quantitative Signal-Driven Trading Pattern (Strategy Base & Risk Decorator)
 
 Trade generation follows a strict multi-tier pipeline:
 1. **Historical Bar Ingestion**: Ingests pandas DataFrames containing OHLCV bars.
@@ -606,21 +393,21 @@ Trade generation follows a strict multi-tier pipeline:
 [MT5Connector.execute_order()] ────► Dispatches Deal to MT5 Win32 IPC / Mock Engine
 ```
 
-### 10. Darwinex Zero Tiered Drawdown Guardrail Pattern
+### 6. Darwinex Zero Tiered Drawdown Guardrail Pattern
 
 Darwinex Zero enforces an uncompromising 3.0% maximum daily floating drawdown limit. To safeguard the account from catastrophic termination, the platform implements a 3-tier reactive monitoring system:
 - **Tier 1: Safe Zone (`< 2.0% Drawdown`)**: Normal trading operations; green status badging (`[● SAFE]`).
 - **Tier 2: Warning Buffer (`>= 2.5% Drawdown`)**: Active risk mitigation alert; amber status badging (`[⚠ WARNING]`). New trade signal generation is paused; existing positions are closely monitored with trailing stops.
 - **Tier 3: Hard Breach Cap (`>= 3.0% Drawdown`)**: Critical risk limit; red alert badging (`[⛔ BREACH]`). System automatically halts trading, dispatches emergency liquidation, and prevents new order generation.
 
-### 11. Hybrid WebSocket-First Push Streaming with Polling Fallback
+### 7. Hybrid WebSocket-First Push Streaming with Polling Fallback
 
 Real-time telemetry architecture balances low-latency responsiveness with network resilience:
-- **Primary Push Channel**: Clients (Android / TUI) open a persistent WebSocket connection to `/ws/live`, receiving 1Hz JSON snapshots containing balance, equity, floating PnL, margin, D-Score, open positions, and strategy status.
+- **Primary Push Channel**: Clients open a persistent WebSocket connection to `/ws/live`, receiving 1Hz JSON snapshots containing balance, equity, floating PnL, margin, D-Score, open positions, and strategy status.
 - **Fallback Polling Channel**: If the WebSocket connection drops, clients seamlessly fall back to polled REST endpoints (`GET /api/v1/account/status`, `GET /api/v1/account/positions`) with exponential backoff (2s to 5s) until the WebSocket stream reconnects.
 - **Poller Suspension During Authentication**: Background telemetry polling is explicitly suspended while an account connection request (`POST /api/v1/account/connect`) is in-flight, preventing network race conditions and lock contention.
 
-### 12. Textual TUI Differential Table Reconciliation Pattern
+### 8. Textual TUI Differential Table Reconciliation Pattern
 
 To eliminate visual flicker and preserve row selection state in terminal dashboards:
 - Rather than clearing and rebuilding the `DataTable` on every 1Hz update, `PositionsTable` maintains keyed row identity tracking (`ticket`).
@@ -635,48 +422,39 @@ To eliminate visual flicker and preserve row selection state in terminal dashboa
 ### Strict Architectural Constraints
 
 1. **Inward-Only Dependency Rule**:
-   - The presentation layer must never directly import or interact with broker SDKs (`MetaTrader5`) or low-level network transports. All operations must flow through ViewModels or Routers.
-   - Domain models (`strategy_engine/models.py`), risk rules (`strategy_engine/risk_manager.py`), and indicator algorithms (`strategy_engine/strategy_base.py`) must remain pure Python/Kotlin with zero UI framework or broker SDK imports.
-2. **Lifecycle-Safe Reactive Collection**:
-   - Android Compose screens must always use `collectAsStateWithLifecycle()` to observe `StateFlow`s. Raw `collectAsState()` is strictly forbidden because it continues collecting when the application is placed in the background.
-3. **Non-Blocking Main Thread & Structured Concurrency**:
-   - In Android, network and I/O operations must execute on `Dispatchers.IO`. `GlobalScope.launch` and `runBlocking` are prohibited in production code.
+   - The presentation layer must never directly import or interact with broker SDKs (`MetaTrader5`) or low-level network transports. All operations must flow through Routers or API clients.
+   - Domain models (`strategy_engine/models.py`), risk rules (`strategy_engine/risk_manager.py`), and indicator algorithms (`strategy_engine/strategy_base.py`) must remain pure Python with zero UI framework or broker SDK imports.
+2. **Non-Blocking Main Thread & Structured Concurrency**:
    - In FastAPI, blocking Win32 MT5 SDK calls (`mt5.initialize`, `mt5.login`, `mt5.order_send`, `mt5.symbols_get`) must never execute directly inside `async def` route handlers. They must be dispatched via `asyncio.to_thread()`.
-4. **Mandatory Pre-Trade Risk Verification**:
+3. **Mandatory Pre-Trade Risk Verification**:
    - No strategy signal may be dispatched to the broker or mock engine without first passing `RiskManager.validate_signal()`. Bypassing risk controls is an intolerable safety violation.
-5. **Platform-Agnostic Core Verification**:
+4. **Platform-Agnostic Core Verification**:
    - All backend code must execute cleanly under Linux and macOS using `mock_mode = True` without requiring physical MetaTrader 5 Windows binaries.
-6. **Strict Concurrency Protection & Snapshot Isolation**:
+5. **Strict Concurrency Protection & Snapshot Isolation**:
    - Shared mutable state in Python (active positions, running status, global config, symbol catalogs) must be guarded by synchronization locks (`_state_lock` or `MT5Connector._lock`).
    - Iterations over dictionary caches must always operate on shallow snapshot copies (`list(cache.values())`) under lock.
-7. **Pydantic v2 Schema Hygiene**:
+6. **Pydantic v2 Schema Hygiene**:
    - Models handling external API responses or broker queries must configure `model_config = ConfigDict(extra="ignore")` or explicit field aliases to prevent runtime crashes caused by unexpected JSON payload keys.
-8. **Zero Hardcoded Secrets or Machine-Specific Paths**:
-   - Never commit passwords, broker login IDs, or user-specific executable paths into git repositories or `gradle.properties`. All credentials must be injected via environment variables (`MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`) or runtime configuration forms.
-9. **Dual-Flavor Application ID Independence**:
-   - The Android `snapshot` flavor must maintain a distinct `applicationId` (`com.darwintrader.app.snapshot`) to prevent overriding production installations.
-10. **Acyclic Package Graph**:
-    - The dependency graph must strictly follow: `models` → `strategy_base` → `risk_manager` / `sample_strategy` → `mt5_connector` → `api_gateway`. Circular imports between packages are strictly prohibited.
+7. **Zero Hardcoded Secrets or Machine-Specific Paths**:
+   - Never commit passwords, broker login IDs, or user-specific executable paths into git repositories. All credentials must be injected via environment variables (`MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`) or runtime configuration forms.
+8. **Acyclic Package Graph**:
+   - The dependency graph must strictly follow: `models` → `strategy_base` → `risk_manager` / `sample_strategy` → `mt5_connector` → `api_gateway`. Circular imports between packages are strictly prohibited.
 
 ### Architectural Anti-Patterns & Solutions
 
 | Anti-Pattern | Violation Scenario | Required Architectural Solution |
 |---|---|---|
-| **Direct API Calls in Composables** | Calling `apiService.getAccountInfo()` inside a Composable button click or `LaunchedEffect`. | Hoist network interaction to a ViewModel; expose immutable `StateFlow<UIState>` collected via `collectAsStateWithLifecycle()`. |
 | **Blocking Event Loop with Win32 IPC** | Calling `mt5.initialize()` or `mt5.login()` directly inside an `async def` FastAPI endpoint. | Wrap blocking Win32 calls in `await asyncio.to_thread(...)` to prevent freezing the server event loop. |
 | **Global Lock Starvation During Connect** | Holding `_state_lock = threading.Lock()` across a 10-second blocking MT5 terminal connection attempt. | Execute connection logic off-thread; acquire `_state_lock` only for instantaneous state assignments upon completion. |
 | **Dictionary Mutation During Concurrent Iteration** | Iterating over `self._symbols_cache.values()` while another thread is updating or clearing the cache. | Acquire `self._lock` and extract a shallow snapshot copy (`list(self._symbols_cache.values())`) before iterating or filtering. |
 | **Unsynchronized WebSocket Reads** | Reading `connector.get_account_info()` from the WebSocket loop without acquiring connector locks while config is being updated. | Synchronize all connector reads and mutations using `MT5Connector._lock` (`threading.RLock()`). |
 | **Bypassing Risk Controls** | Executing orders directly from strategy signals without calling `RiskManager.validate_signal()`. | Route every signal through `RiskManager.validate_signal()` before calculating lot sizes or invoking `execute_order()`. |
 | **Ignoring Discretionary Trades in Risk Checks** | Filtering open positions strictly by `magic_number`, ignoring manual orders (`magic == 0`) that consume account margin and drawdown. | Retrieve all open positions across symbols and include `magic == 0` when calculating margin, drawdown, and kill-switch liquidation. |
-| **Raw Hardcoded Theme Colors** | Hardcoding raw hex color strings (`#00E676`, `#FF1744`) inside Compose screen files. | Consume centralized theme tokens from `MaterialTheme.colorScheme.*` defined in `ui/theme/Theme.kt`. |
-| **Raw `collectAsState()` in Compose** | Collecting state using `viewModel.uiState.collectAsState()` in Compose screens. | Always use `collectAsStateWithLifecycle()` from `androidx.lifecycle.compose` to prevent leaks when backgrounded. |
-| **UI Logic in Domain Layer** | Importing Android UI widgets, formatters, or Compose annotations into domain entities or risk calculations. | Keep domain models 100% pure Kotlin / Python data classes with zero platform UI imports. |
 | **Modifying Pydantic Private Internals** | Manipulating `__dict__` or `__pydantic_fields_set__` directly to reset configuration fields. | Use `source = other.model_copy(update=overrides)` and iterate over `model_dump().items()`, as implemented in `StrategyConfig.reset_from()`. |
 | **Unprotected Kill-Switch Double-Dispatch** | Allowing rapid repeated clicks on "Kill Switch" to dispatch concurrent liquidation loops. | Implement UI button debouncing, immediately disable confirmation buttons on click, and ensure backend liquidation loops are idempotent. |
 | **Full Table Clearing on Telemetry Updates** | Invoking `DataTable.clear()` and rebuilding rows every second in the TUI positions table, resetting user row selection. | Perform differential keyed updates using `DataTable.update_cell` to preserve row identity and selection state. |
 | **Hardcoded Machine Paths in Git** | Committing hardcoded terminal paths (`C:\Program Files\...`) into repository files. | Read defaults from `os.getenv("MT5_PATH")` and allow dynamic overrides via UI configuration forms. |
-| **Uncoordinated Polling During Connect** | TUI/Mobile client polling `/status` and `/positions` while `/connect` is processing, timing out and showing false disconnect banners. | Suspend background telemetry polling while account authentication requests are active; resume on response or timeout. |
+| **Uncoordinated Polling During Connect** | TUI client polling `/status` and `/positions` while `/connect` is processing, timing out and showing false disconnect banners. | Suspend background telemetry polling while account authentication requests are active; resume on response or timeout. |
 
 ---
 
@@ -685,12 +463,11 @@ To eliminate visual flicker and preserve row selection state in terminal dashboa
 When proposing architectural refactors, introducing new layers, or extending core features:
 
 1. **Automated Verification**:
-   - Android JVM unit tests pass: `cd android; .\gradlew.bat testSnapshotDebugUnitTest --no-daemon; cd ..`
-   - Backend unit tests pass: `pytest api_gateway/tests strategy_engine/tests tui/tests`
-   - Snapshot build succeeds: `cd android; .\gradlew.bat assembleSnapshot -PsnapshotLabel=localtest --no-daemon; cd ..`
+   - Test suite passes: `pytest api_gateway/tests strategy_engine/tests tui/tests`
+   - Zero errors, zero failures, 100% green pass.
 2. **Clean Architecture Compliance**:
    - Architectural boundaries (`domain`, `data`, `presentation`) are strictly respected.
-   - Zero Android SDK imports in domain packages; zero MetaTrader5 imports in base strategy or domain models.
+   - Zero MetaTrader5 imports in base strategy or domain models.
 3. **Living Documentation Synchronization**:
    - Any modifications to data contracts, layer topologies, or design patterns must be immediately synchronized with `.graph/architecture.md`.
 4. **Changelog Maintenance**:

@@ -18,8 +18,8 @@ analysis output only; a separate step acts on it.
 **If `existing_subtasks.json` is absent or empty** — this is a fresh story,
 no subtasks exist yet:
 1. Read the repository to understand existing patterns, integration points,
-   and architectural constraints across Android (`android/app/`) and Backend
-   (`api_gateway/`, `strategy_engine/`).
+   and architectural constraints across Terminal UI (`tui/`), API Gateway
+   (`api_gateway/`), and Strategy Engine (`strategy_engine/`).
 2. Refine technical details the PO-level draft couldn't have known, and
    make minor adjustments directly where they are clearly technical (not
    business) calls.
@@ -41,11 +41,10 @@ escalation (read the issue's most recent comment for their answer):
 Each subtask's fields must be filled in as if completing this repo's real
 `.github/ISSUE_TEMPLATE/subtask.yml` form: task-description, entry-points
 (files to create/change, existing code to imitate), acceptance-criteria
-(1-3, testable), verification (exact commands to prove it's done: Android unit
-tests `cd android; .\gradlew.bat testSnapshotDebugUnitTest --no-daemon`, Python
-tests `pytest api_gateway/tests strategy_engine/tests`, and E2E tests
-`.\scripts\run-e2e-tests.ps1 -Delta`), size (XS/S/M), complexity
-(Low/Medium/High), blocked-by (dependencies among subtasks).
+(1-3, testable), verification (exact commands to prove it's done: Python
+test suite `pytest api_gateway/tests strategy_engine/tests tui/tests`),
+size (XS/S/M), complexity (Low/Medium/High), blocked-by (dependencies
+among subtasks).
 
 ==============================
 CONTEXT FILES: issue_context.json (required), existing_subtasks.json (if present)

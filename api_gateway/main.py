@@ -13,11 +13,11 @@ from .routes_assets import router as assets_router
 
 app = FastAPI(
     title="Darwin Trader API Gateway",
-    description="FastAPI Bridge connecting Python MT5 Strategy Engine to Android Mobile App",
+    description="FastAPI Bridge connecting Python MT5 Strategy Engine to Terminal UI and Web Clients",
     version="1.0.0"
 )
 
-# Enable CORS for Android App / Web client connectivity
+# Enable CORS for Terminal UI / Web client connectivity
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,7 +44,7 @@ def read_root():
 @app.websocket("/ws/live")
 async def websocket_live_stream(websocket: WebSocket):
     """
-    WebSocket endpoint streaming real-time account equity, balance, PnL & tick data to Android App.
+    WebSocket endpoint streaming real-time account equity, balance, PnL & tick data to Terminal UI / Web clients.
     """
     await websocket.accept()
     try:

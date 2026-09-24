@@ -57,12 +57,11 @@ Comments (JSON array, chronological):
 story, no subtasks exist yet:
 1. Use Read/Grep/Glob to look at the actual repository -- existing
    patterns, integration points, and architectural constraints relevant to
-   this story across Android (`android/app/src/main/`) and Backend
-   (`api_gateway/`, `strategy_engine/`) -- before refining technical
-   details the PO-level draft couldn't have known. Make minor adjustments
-   directly where they are clearly technical (not business) calls. Ground
-   `entry_points` and `task_description` in files you actually found, not
-   guesses.
+   this story across Terminal UI (`tui/`), API Gateway (`api_gateway/`), and
+   Backend (`strategy_engine/`) -- before refining technical details the
+   PO-level draft couldn't have known. Make minor adjustments directly where
+   they are clearly technical (not business) calls. Ground `entry_points` and
+   `task_description` in files you actually found, not guesses.
 2. If you find a real conflict or a decision only the PO can make, do not
    guess -- set `outcome` to `PO_ESCALATION` with a specific `conflict`.
 3. Otherwise, decompose the story into SMART subtasks (2-3 is typical for
@@ -85,12 +84,10 @@ Each subtask's fields must be filled in as if completing this repo's real
 `.github/ISSUE_TEMPLATE/subtask.yml` form: task-description, entry-points
 (real files to create/change, existing code to imitate -- found via
 Read/Grep/Glob, not guessed), acceptance-criteria
-(1-3, testable), verification (exact commands to prove it's done: Android unit
-tests `cd android; .\gradlew.bat testSnapshotDebugUnitTest --no-daemon; cd ..`,
-Python backend tests `python -m pytest api_gateway/tests strategy_engine/tests`,
-and targeted E2E tests `.\scripts\run-e2e-tests.ps1 -Delta`), size (XS/S/M),
-complexity (Low/Medium/High), blocked-by (dependencies among the subtasks
-you're proposing, by title).
+(1-3, testable), verification (exact commands to prove it's done: Python
+test suite `python -m pytest api_gateway/tests strategy_engine/tests tui/tests`),
+size (XS/S/M), complexity (Low/Medium/High), blocked-by (dependencies among
+the subtasks you're proposing, by title).
 
 ## Output format -- read carefully
 

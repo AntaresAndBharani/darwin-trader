@@ -52,14 +52,14 @@ issue's acceptance criteria:
    for? Does it stay within the boundaries of the parent user story without
    unauthorized scope creep?
 2. **Code quality & architecture**:
-   - **Android**: Jetpack Compose state handling, Material 3 theming, MVVM / UDF
-     separation, coroutine lifecycle safety.
+   - **Terminal UI**: Textual widget reactivity, layout resilience, async API communication.
    - **Backend**: FastAPI route parameter validation, Pydantic models, MT5 error
      handling and thread safety.
    - **Testing**: Are test assertions meaningful? Verify that no test was
      weakened or deleted to force a pass.
-3. **E2E & Evidence**: Check whether changes affecting UI screens or navigation
-   include appropriate test coverage or Maestro flow updates.
+3. **Testing Coverage**: Check that changes affecting UI or backend include
+   appropriate test coverage across pytest test suites (`api_gateway/tests`,
+   `strategy_engine/tests`, `tui/tests`).
 
 Verdict rules:
 - `APPROVED`: The changes fulfill the requirements safely with passing tests

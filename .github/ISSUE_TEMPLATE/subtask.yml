@@ -36,7 +36,7 @@ body:
       label: Task description
       description: What exactly needs to be implemented.
       placeholder: |
-        Add a StrategyStatusCard composable showing MT5 connection and active strategy state.
+        Add a StrategyStatusWidget showing MT5 connection and active strategy state in the TUI.
     validations:
       required: true
 
@@ -46,8 +46,8 @@ body:
       label: Files / entry points
       description: Where the work happens. List files to create or modify.
       placeholder: |
-        - Create/Modify: android/app/src/main/java/com/darwintrader/app/ui/dashboard/DashboardScreen.kt
-        - Follow pattern in: android/app/src/main/java/com/darwintrader/app/ui/theme/Theme.kt
+        - Create/Modify: tui/widgets/strategy_panel.py
+        - Follow pattern in: tui/widgets/summary_cards.py
     validations:
       required: true
 
@@ -57,7 +57,7 @@ body:
       label: Acceptance criteria
       description: Testable conditions specific to this subtask.
       placeholder: |
-        - [ ] Card displays current strategy status
+        - [ ] Widget displays current strategy status
         - [ ] Status color matches RUNNING / IDLE state
     validations:
       required: true
@@ -68,8 +68,7 @@ body:
       label: How to verify
       description: Exact commands to prove completion.
       placeholder: |
-        cd android; .\gradlew.bat testSnapshotDebugUnitTest --no-daemon
-        .\scripts\run-e2e-tests.ps1 -Delta
+        pytest api_gateway/tests strategy_engine/tests tui/tests
     validations:
       required: true
 

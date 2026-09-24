@@ -34,7 +34,7 @@ body:
       label: Business context — Relevant
       description: Why does this story exist now? What problem does it solve, for whom, and which product goal or OKR does it serve?
       placeholder: |
-        e.g. Traders need mobile visibility into automated MT5 strategy execution and live drawdown.
+        e.g. Traders need real-time terminal visibility into automated MT5 strategy execution and live drawdown.
     validations:
       required: true
 
@@ -45,7 +45,7 @@ body:
       description: How will we know this worked, in numbers? Give the metric, its current baseline, and the target.
       placeholder: |
         - Dashboard latency: < 500ms
-        - E2E flow pass rate: 100%
+        - Test suite pass rate: 100%
     validations:
       required: true
 
@@ -55,7 +55,7 @@ body:
       label: Acceptance criteria — Specific / Measurable
       description: Testable, unambiguous conditions that define "this works." Prefer Given/When/Then.
       placeholder: |
-        - [ ] Given an active strategy, when opening the app, then the current equity and drawdown status are visible
+        - [ ] Given an active strategy, when opening the TUI dashboard, then the current equity and drawdown status are visible
         - [ ] Given a change in parameters, when saving, then the gateway receives updated risk limits
     validations:
       required: true
@@ -67,7 +67,7 @@ body:
       description: What must already exist for this to be buildable? List known unknowns or blockers.
       placeholder: |
         - Requires FastAPI routes in api_gateway
-        - Android Jetpack Compose UI components in android/app
+        - Textual UI components in tui/
     validations:
       required: true
 

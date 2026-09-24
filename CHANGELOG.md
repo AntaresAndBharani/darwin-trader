@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Pipeline, Workflow, Agent Governance, Prompts & Documentation Alignment (Issue #99, Parent #97)**:
+  - Cleaned `api_gateway/main.py` docstrings and CORS comments to reference Terminal UI and Web clients rather than Android Mobile App.
+  - Modernized `README.md`, `GEMINI.md`, and `.graph/architecture.md` to reflect the pure Python Textual TUI, FastAPI Gateway, and MetaTrader 5 Strategy Engine architecture, dropping obsolete mobile build/test instructions.
+  - Cleaned `.gitignore` by removing legacy Android, Gradle, and keystore ignore rules.
+  - Aligned Antigravity rules and agent personas (`.antigravity/rules.md`, `.antigravity/agents/{developer,tester}.md`, `.antigravity/tasks/{backlog-triage,dev-test-fixup,dev-test-implement,dev-test,three-amigos}.md`) to focus strictly on pure Python development and pytest execution across `api_gateway/tests`, `strategy_engine/tests`, and `tui/tests`.
+  - Aligned CI workflow prompts in `.github/workflows/prompts/` (`dev-test-implement.md`, `dev-test-fixup.md`, `architect-decompose.md`, `pr-review.md`, `three-amigos.md`) and Claude tasks in `.claude/tasks/` (`architect-decompose.md`, `architect-restructure.md`, `pr-review.md`, `three-amigos-judge.md`).
+  - Refactored GitHub issue templates in `.github/ISSUE_TEMPLATE/` (`subtask.yml`, `user-story.yml`) to use TUI and pytest verification placeholders.
+  - Added comprehensive automated acceptance test suite in `strategy_engine/tests/test_pipeline_governance_alignment.py` verifying all Gherkin acceptance criteria (Scenarios 2-7) and zero dangling mobile references.
+
 ### Removed
 - **Android Codebase & Legacy Mobile Scripts Decommissioning (Issue #98, Parent #97)**:
   - Removed entire Android client application source code, Gradle build system, and JUnit test suites under `android/`.

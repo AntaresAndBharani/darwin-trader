@@ -1,20 +1,16 @@
 # Darwin Trader - Project Instructions & Context
 
 ## Project Overview
-- **Application:** Darwin Trader — Algorithmic Trading Platform (Android Mobile Client + Python FastAPI Gateway + MetaTrader5 Strategy Engine).
+- **Application:** Darwin Trader — Algorithmic Trading Platform (Python Textual TUI Client + Python FastAPI Gateway + MetaTrader5 Strategy Engine).
 - **Stack:**
-  - **Android:** Android SDK 35, Kotlin (JVM 17), Jetpack Compose, Material 3, Retrofit, OkHttp.
-  - **Backend:** Python 3.10+, FastAPI, MetaTrader5, Pandas, NumPy, pytest.
-- **Build Tool:** Gradle Kotlin DSL (Use `.\gradlew.bat` in `android/` on Windows).
+  - **Terminal UI (TUI):** Python 3.11+, Textual, Rich, AsyncIO, HTTPX.
+  - **Backend Gateway:** Python 3.11+, FastAPI, Uvicorn, WebSockets, Pydantic v2.
+  - **Strategy Engine:** Python 3.11+, MetaTrader5, Pandas, NumPy, SQLite, pytest.
 
 ## Quick Commands
 - **GitHub Token Setup:** `& C:\Users\rogal\workspaces\Set-GhToken-Antares.ps1` (Run before git push / gh commands)
-- **Run Android Unit Tests:** `cd android; .\gradlew.bat testSnapshotDebugUnitTest --no-daemon; cd ..`
-- **Run Backend Tests:** `pytest api_gateway/tests strategy_engine/tests`
-- **Build Snapshot APK (CI Parity):** `cd android; .\gradlew.bat assembleSnapshot -PsnapshotLabel=localtest --no-daemon; cd ..`
-- **Full Pre-PR Verification Suite:** `cd android; .\gradlew.bat testSnapshotDebugUnitTest assembleSnapshot -PsnapshotLabel=localtest --no-daemon; cd ..`
-- **Run Targeted E2E Tests (Maestro):** `.\scripts\run-e2e-tests.ps1 -Delta`
-- **Capture & Publish E2E Artifacts:** `.\scripts\run-e2e-tests.ps1 -CaptureArtifacts -Version "latest" -PushArtifacts`
+- **Run Test Suite:** `pytest api_gateway/tests strategy_engine/tests tui/tests`
+- **Launch Terminal UI (TUI):** `powershell .\scripts\run-tui.ps1` (or `python -m tui.app`)
 - **Local Pipeline Nodes (CLI):**
   - **Register All Scheduled Tasks:** `.\scripts\local-pipeline\register-local-tasks.ps1`
   - **Run Backlog Triage:** `.\scripts\local-pipeline\run-backlog-triage.ps1`
@@ -24,16 +20,13 @@
 
 ## Core Development Guidelines
 1. **Architecture:**
-   - **Android:** MVVM with Unidirectional Data Flow (UDF). Composable -> ViewModel / ScreenState -> ApiService -> Retrofit.
-   - **Backend:** Modular FastAPI routes (`routes_account.py`, `routes_strategy.py`) + Strategy Engine (`backtester.py`, `risk_manager.py`).
-2. **Testing & CI Parity:** Prior to opening a PR, run the **Full Pre-PR Verification Suite** and ensure all local unit tests and delta E2E flows pass.
-3. **E2E Visual Testing:** When modifying UI components in `android/app/src/main/java/**/ui/`, run targeted delta E2E flows (`.\scripts\run-e2e-tests.ps1 -Delta`) and capture visual artifacts to `docs/screenshots/`.
-4. **Environment Isolation:** User-specific JVM paths belong in `~/.gradle/gradle.properties`. Never commit machine-specific paths into repository `gradle.properties`.
-5. **Local APK Sync:** When building APKs, automatically copy the output APK to `local_test\latest.apk`.
-6. **GitHub Permissions:** Always run `C:\Users\rogal\workspaces\Set-GhToken-Antares.ps1` for Git push and `gh` operations under the `AntaresAndBharani` organization.
-7. **CI/CD Lifecycle & Definition of Done:**
-   - **PR Workflow:** Opening/updating a PR builds the snapshot APK and updates the rolling `snapshot` pre-release on GitHub.
-   - **Agent Completion Gate:** Development is only complete when local tests pass, delta E2E artifacts are captured, PR is opened, and remote CI checks pass (100% Green).
+   - **Terminal UI:** Textual reactive UI (`tui/`), widgets (`summary_cards.py`, `positions_table.py`, `strategy_panel.py`, `header_bar.py`), modal screens (`connect_modal.py`, `asset_explorer_modal.py`, `confirm_modal.py`), API client (`api_client.py`).
+   - **Backend:** Modular FastAPI routes (`routes_account.py`, `routes_strategy.py`, `routes_assets.py`) + Strategy Engine (`backtester.py`, `risk_manager.py`, `mt5_connector.py`, `cli_history.py`).
+2. **Testing & CI Parity:** Prior to opening a PR, run the full test suite (`pytest api_gateway/tests strategy_engine/tests tui/tests`) and ensure 100% green pass.
+3. **GitHub Permissions:** Always run `C:\Users\rogal\workspaces\Set-GhToken-Antares.ps1` for Git push and `gh` operations under the `AntaresAndBharani` organization.
+4. **CI/CD Lifecycle & Definition of Done:**
+   - **PR Workflow:** Opening/updating a PR triggers the hard-gated Python CI workflow in `.github/workflows/build.yml`.
+   - **Agent Completion Gate:** Development is only complete when local tests pass, all changes are committed, PR is opened, and remote CI checks pass (100% Green).
 
 ## Agentic SDLC Pipeline
 The 5-node autonomous pipeline (Architect → Three Amigos → Dev & Test → PR Review → Merge & Backlog) runs across GitHub Actions and Antigravity Scheduled Tasks:

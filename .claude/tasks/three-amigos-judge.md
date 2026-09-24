@@ -37,11 +37,11 @@ Body:
 Per subtask, assess:
 1. **Product** — is the business intent and scope clear against Darwin Trader's
    algorithmic trading goals?
-2. **Developer** — are technical touchpoints, Android UI Compose patterns,
+2. **Developer** — are technical touchpoints, Terminal UI Textual patterns,
    FastAPI routes, MT5 strategy interfaces, and failure modes addressed?
 3. **QA** — are acceptance criteria deterministic and testable? Formulate
-   Given/When/Then BDD scenarios and identify matching Maestro E2E tags
-   (`dashboard`, `strategies`, `backtest`, `theme`, `navigation`, `core`).
+   Given/When/Then BDD scenarios and identify matching pytest test suites
+   (`api_gateway/tests`, `strategy_engine/tests`, `tui/tests`).
 
 Verdict per subtask: `READY`, `NEEDS_REVISION` (fundamentally incomplete or
 misscoped), or `NEEDS_CLARIFICATION` (sound but has specific narrow questions).

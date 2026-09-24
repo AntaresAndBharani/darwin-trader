@@ -6,8 +6,8 @@ Read `issue_context.json` for the parent story, `subtasks_context.json` for all
 open subtasks, and the repository code.
 
 QA Perspective must verify that acceptance criteria map to Given/When/Then BDD
-scenarios and assign matching E2E flow tags (`dashboard`, `strategies`,
-`backtest`, `theme`, `navigation`, `core`).
+scenarios and verify unit and integration test coverage across pytest test suites
+(`api_gateway/tests`, `strategy_engine/tests`, `tui/tests`).
 
 Write your final structured verdict to `three_amigos_output.json`.
 
@@ -15,7 +15,7 @@ Output schema for three_amigos_output.json:
 {
   "product_analysis": { "scope_verdict": "CLEAR | NEEDS_SPLIT | AMBIGUOUS", "notes": "string" },
   "developer_analysis": { "technical_risks": ["string"], "missing_technical_details": ["string"] },
-  "qa_analysis": { "is_testable": true, "bdd_scenarios": ["Given ... When ... Then ..."], "e2e_tags": ["string"], "unhandled_edge_cases": ["string"] },
+  "qa_analysis": { "is_testable": true, "bdd_scenarios": ["Given ... When ... Then ..."], "test_modules": ["string"], "unhandled_edge_cases": ["string"] },
   "verdict": "READY | NEEDS_REVISION | NEEDS_CLARIFICATION",
   "clarification_questions": [
     { "subtask_number": 0, "field": "string", "question": "string" }
