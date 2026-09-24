@@ -19,7 +19,7 @@
                 already resolves the unambiguously-additive case during
                 rebase; anything git can't auto-resolve is exactly the
                 "needs a human" case. Stops the chain if it finds and
-                handles one. Runs both Android and Python test suites.
+                handles one. Runs Python backend and TUI test suites.
       Step 3  - fix-up work (PR labeled review:changes-requested).
                 Discovery is deterministic (the wrapper finds which PR);
                 the actual fix is genuinely agentic -- real file/bash
@@ -410,16 +410,11 @@ function Invoke-ConflictResolutionStep {
 
     Write-Log "Rebase of PR #$prNumber completed cleanly. Re-running test suites before pushing."
 
-    # Android unit tests
-    $androidGradle = Join-Path $RepoRoot "android\gradlew.bat"
-    $androidDir = Join-Path $RepoRoot "android"
-    $androidTests = Invoke-NativeProcess -FilePath $androidGradle -ArgumentStrings @("testSnapshotDebugUnitTest", "--no-daemon") -WorkingDirectory $androidDir
+    # Python backend & TUI tests
+    $pythonTests = Invoke-NativeProcess -FilePath "python.exe" -ArgumentStrings @("-m", "pytest", "api_gateway/tests", "strategy_engine/tests", "tui/tests") -WorkingDirectory $RepoRoot
 
-    # Python backend tests
-    $pythonTests = Invoke-NativeProcess -FilePath "python.exe" -ArgumentStrings @("-m", "pytest", "api_gateway/tests", "strategy_engine/tests") -WorkingDirectory $RepoRoot
-
-    if ($androidTests.ExitCode -ne 0 -or $pythonTests.ExitCode -ne 0) {
-        Write-Log "Tests failed after rebase for PR #$prNumber (Android: $($androidTests.ExitCode), Python: $($pythonTests.ExitCode)). Escalating rather than pushing a broken branch."
+    if ($pythonTests.ExitCode -ne 0) {
+        Write-Log "Tests failed after rebase for PR #$prNumber (Python: $($pythonTests.ExitCode)). Escalating rather than pushing a broken branch."
         Invoke-GhCommand -GhArgs @("pr", "comment", $prNumber, "--repo", $Repo, "--body", "Rebased onto main cleanly, but the test suite fails on the rebased branch -- this needs a human look, not an automated push. Left the branch as rebased locally; origin unchanged.") | Out-Null
         if ($subtaskNumber) { Invoke-GhCommand -GhArgs @("issue", "edit", $subtaskNumber, "--repo", $Repo, "--add-label", "status:needs-po-input") | Out-Null }
         Invoke-GitCommand -GitArgs @("checkout", "main") | Out-Null
