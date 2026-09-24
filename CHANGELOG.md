@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Hierarchical Category Filters & Split Columns in Asset Explorer (Issue #101)**:
+  - Implemented `parse_category_parts(category, symbol)` parsing hierarchical paths into distinct Class, Region, and Exchange tuples, stripping trailing symbol names case-insensitively, normalizing empty segments to `"--"`, and preserving exact source casing (e.g. `ETFs`).
+  - Replaced single category dropdown with a 3-tier cascading filter bar (`#select-class`, `#select-region`, `#select-exchange`) where Region and Exchange are dynamically populated and enabled based on parent selection, resetting child options and values cleanly on parent changes.
+  - Split single `Category` column in `AssetExplorerModal`'s `DataTable` into separate `Class`, `Region`, and `Exchange` columns alongside `Symbol`, `Description`, `CCY`, `Min Lot`, `Max Lot`, `Bid`, and `Ask` (10 columns).
+  - Implemented real-time client-side in-memory multi-predicate filtering matching on Symbol and Description case-insensitively with formatted status reporting (`Showing {visible} of {total} assets matching [{hierarchy} | "{search}"]`).
+  - Added `F4` hotkey and `#btn-reset-filters` button to reset all category and search filters to defaults, or trigger a full catalog retry reload if the initial load failed.
+  - Added Enter keybinding on `#asset-search-input` (`Input.Submitted`) to shift focus directly to the `DataTable`.
+  - Added comprehensive automated acceptance test suite covering all 6 Gherkin BDD scenarios in `tui/tests/test_tui.py`.
+
 - **Pipeline, Workflow, Agent Governance, Prompts & Documentation Alignment (Issue #99, Parent #97)**:
   - Cleaned `api_gateway/main.py` docstrings and CORS comments to reference Terminal UI and Web clients rather than Android Mobile App.
   - Modernized `README.md`, `GEMINI.md`, and `.graph/architecture.md` to reflect the pure Python Textual TUI, FastAPI Gateway, and MetaTrader 5 Strategy Engine architecture, dropping obsolete mobile build/test instructions.

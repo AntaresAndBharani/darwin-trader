@@ -44,7 +44,7 @@ from tui.api_client import DarwinApiClient
 from tui.app import DarwinTraderApp
 from tui.screens.connect_modal import ConnectModal
 from tui.screens.confirm_modal import ConfirmModal
-from tui.screens.asset_explorer_modal import AssetExplorerModal
+from tui.screens.asset_explorer_modal import AssetExplorerModal, parse_category_parts
 from tui.screens.historical_data_modal import HistoricalDataModal
 from tui.widgets.header_bar import HeaderBar
 from tui.widgets.summary_cards import SummaryCards, MetricCard
@@ -1509,16 +1509,7 @@ async def test_asset_explorer_modal_catalog_display_and_search():
     )
     mock_client.get_positions.return_value = []
     mock_client.get_strategy_status.return_value = {"status": "IDLE"}
-
-    async def fake_get_assets(category="stocks", search=None):
-        if search:
-            return [
-                a for a in MOCK_EXPLORER_ASSETS
-                if search.lower() in a.symbol.lower() or search.lower() in a.description.lower()
-            ]
-        return list(MOCK_EXPLORER_ASSETS)
-
-    mock_client.get_assets.side_effect = fake_get_assets
+    mock_client.get_assets.return_value = MOCK_EXPLORER_ASSETS
 
     app = DarwinTraderApp(api_client=mock_client)
     async with app.run_test(size=(100, 40)) as pilot:
@@ -1531,6 +1522,18 @@ async def test_asset_explorer_modal_catalog_display_and_search():
 
         table = modal.query_one("#assets-data-table", DataTable)
         assert table.row_count == 4
+        assert [col.label.plain for col in table.columns.values()] == [
+            "Symbol",
+            "Description",
+            "Class",
+            "Region",
+            "Exchange",
+            "CCY",
+            "Min Lot",
+            "Max Lot",
+            "Bid",
+            "Ask",
+        ]
 
         # Search for NVDA
         search_input = modal.query_one("#asset-search-input", Input)
@@ -1539,7 +1542,7 @@ async def test_asset_explorer_modal_catalog_display_and_search():
 
         assert table.row_count == 1
         status_bar = modal.query_one("#status-bar", Static)
-        assert "Showing 1 stocks assets matching \"NVDA\"" in str(status_bar.content)
+        assert 'Showing 1 of 4 assets matching ["NVDA"]' in str(status_bar.content)
 
 
 @pytest.mark.asyncio
@@ -1564,16 +1567,417 @@ async def test_asset_explorer_modal_category_switching_and_close_button():
         modal = app.screen
         assert isinstance(modal, AssetExplorerModal)
 
-        category_select = modal.query_one("#category-select", Select)
-        category_select.value = "etfs"
-        await pilot.pause(0.1)
-
-        mock_client.get_assets.assert_called_with(category="etfs", search=None)
+        class_select = modal.query_one("#select-class", Select)
+        assert class_select.value == "ALL"
 
         # Close via Button
         modal.query_one("#btn-close", Button).press()
         await pilot.pause(0.1)
         assert not isinstance(app.screen, AssetExplorerModal)
+
+
+# =============================================================================
+# Issue #101: Hierarchical Category Filters & Split Columns in Asset Explorer
+# =============================================================================
+
+MOCK_HIERARCHICAL_ASSETS = [
+    AssetInfo(
+        symbol="ADBE",
+        description="Adobe Systems Inc",
+        category="Stocks/US/Nasdaq/ADBE",
+        currency="USD",
+        lot_min=0.01,
+        lot_max=100.0,
+        bid=None,
+        ask=None,
+    ),
+    AssetInfo(
+        symbol="NVDA",
+        description="NVIDIA Corporation",
+        category="Stocks/US/Nasdaq",
+        currency="USD",
+        lot_min=1.0,
+        lot_max=500.0,
+        bid=221.76,
+        ask=221.80,
+    ),
+    AssetInfo(
+        symbol="MSFT",
+        description="Microsoft Corp",
+        category="Stocks/US/Nasdaq",
+        currency="USD",
+        lot_min=1.0,
+        lot_max=500.0,
+        bid=425.20,
+        ask=425.30,
+    ),
+    AssetInfo(
+        symbol="PM",
+        description="Philip Morris International",
+        category="Stocks/US/NYSE",
+        currency="USD",
+        lot_min=1.0,
+        lot_max=500.0,
+        bid=100.50,
+        ask=100.60,
+    ),
+    AssetInfo(
+        symbol="EURUSD",
+        description="Euro / US Dollar",
+        category="Forex/Majors/EURUSD",
+        currency="USD",
+        lot_min=0.01,
+        lot_max=100.0,
+        bid=1.0850,
+        ask=1.0852,
+    ),
+    AssetInfo(
+        symbol="GBPUSD",
+        description="British Pound / US Dollar",
+        category="Forex/Majors",
+        currency="USD",
+        lot_min=0.01,
+        lot_max=100.0,
+        bid=1.2750,
+        ask=1.2753,
+    ),
+    AssetInfo(
+        symbol="BTCUSD",
+        description="Bitcoin / US Dollar",
+        category="Crypto/BTCUSD",
+        currency="USD",
+        lot_min=0.01,
+        lot_max=10.0,
+        bid=60000.0,
+        ask=60050.0,
+    ),
+    AssetInfo(
+        symbol="XAUUSD",
+        description="Gold Spot / US Dollar",
+        category="Commodities/Metals/Gold",
+        currency="USD",
+        lot_min=0.01,
+        lot_max=50.0,
+        bid=2400.0,
+        ask=2401.0,
+    ),
+]
+
+
+def test_parse_category_parts_scenario_6():
+    """Verify Scenario 6: Robust Category Parsing Across Live MT5 and Mock Catalog Shapes."""
+    cases = [
+        ("Stocks/US/Nasdaq/ADBE", "ADBE", ("Stocks", "US", "Nasdaq")),
+        ("Stocks/US/Nasdaq", "MSFT", ("Stocks", "US", "Nasdaq")),
+        ("Forex/Majors/EURUSD", "EURUSD", ("Forex", "Majors", "--")),
+        ("Forex/Majors", "GBPUSD", ("Forex", "Majors", "--")),
+        ("Crypto/BTCUSD", "BTCUSD", ("Crypto", "--", "--")),
+        ("Commodities/Metals/Gold", "XAUUSD", ("Commodities", "Metals", "Gold")),
+        ("", "UNK", ("--", "--", "--")),
+    ]
+    for cat_path, sym, expected in cases:
+        assert parse_category_parts(cat_path, sym) == expected
+
+    # Preserve exact segment casing
+    assert parse_category_parts("ETFs/US/Nasdaq", "QQQ") == ("ETFs", "US", "Nasdaq")
+
+    # Case-insensitive symbol strip
+    assert parse_category_parts("Stocks/US/Nasdaq/adbe", "ADBE") == ("Stocks", "US", "Nasdaq")
+    assert parse_category_parts("Stocks/US/Nasdaq/ADBE", "adbe") == ("Stocks", "US", "Nasdaq")
+
+    # Empty/None fallbacks
+    assert parse_category_parts(None, "UNK") == ("--", "--", "--")
+    assert parse_category_parts("   ", "UNK") == ("--", "--", "--")
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_scenario_1_initial_population_and_split_columns():
+    """Verify Scenario 1: Initial Population of Dynamic Category Hierarchy & Split Columns."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = MOCK_HIERARCHICAL_ASSETS
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause(0.1)
+
+        modal = app.screen
+        assert isinstance(modal, AssetExplorerModal)
+
+        class_select = modal.query_one("#select-class", Select)
+        region_select = modal.query_one("#select-region", Select)
+        exchange_select = modal.query_one("#select-exchange", Select)
+
+        # Distinct root categories parsed from catalog, preserving exact source case
+        class_options = [opt[1] for opt in class_select._options]
+        assert "ALL" in class_options
+        assert "Stocks" in class_options
+        assert "Forex" in class_options
+        assert "Crypto" in class_options
+        assert "Commodities" in class_options
+        assert class_select.value == "ALL"
+
+        # Region & Exchange defaults to "All ..." and disabled
+        assert region_select.value == "ALL"
+        assert region_select.disabled is True
+        assert exchange_select.value == "ALL"
+        assert exchange_select.disabled is True
+
+        # Split columns in DataTable
+        table = modal.query_one("#assets-data-table", DataTable)
+        col_names = [col.label.plain for col in table.columns.values()]
+        assert col_names == [
+            "Symbol",
+            "Description",
+            "Class",
+            "Region",
+            "Exchange",
+            "CCY",
+            "Min Lot",
+            "Max Lot",
+            "Bid",
+            "Ask",
+        ]
+
+        # All 8 assets displayed initially
+        assert table.row_count == 8
+
+        # Status bar reports total assets
+        status_bar = modal.query_one("#status-bar", Static)
+        assert "Showing 8 of 8 assets" in str(status_bar.content)
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_scenario_2_cascading_drilldown_and_synchronized_columns():
+    """Verify Scenario 2: Cascading Category Drilldown and Synchronized Column Values."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = MOCK_HIERARCHICAL_ASSETS
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause(0.1)
+
+        modal = app.screen
+        class_select = modal.query_one("#select-class", Select)
+        region_select = modal.query_one("#select-region", Select)
+        exchange_select = modal.query_one("#select-exchange", Select)
+        table = modal.query_one("#assets-data-table", DataTable)
+
+        # 1. Select Class "Stocks"
+        class_select.value = "Stocks"
+        await pilot.pause(0.1)
+
+        assert region_select.disabled is False
+        region_options = [opt[1] for opt in region_select._options]
+        assert "ALL" in region_options
+        assert "US" in region_options
+        assert exchange_select.disabled is True
+
+        # 2. Select Region "US"
+        region_select.value = "US"
+        await pilot.pause(0.1)
+
+        assert exchange_select.disabled is False
+        exchange_options = [opt[1] for opt in exchange_select._options]
+        assert "ALL" in exchange_options
+        assert "Nasdaq" in exchange_options
+        assert "NYSE" in exchange_options
+
+        # 3. Select Exchange "Nasdaq"
+        exchange_select.value = "Nasdaq"
+        await pilot.pause(0.1)
+
+        # Table shows only Stocks/US/Nasdaq (ADBE, NVDA, MSFT -> 3 rows)
+        assert table.row_count == 3
+        for row_idx in range(table.row_count):
+            row = table.get_row_at(row_idx)
+            assert row[2] == "Stocks"  # Class
+            assert row[3] == "US"      # Region
+            assert row[4] == "Nasdaq"  # Exchange
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_scenario_3_real_time_search_and_focus_enter():
+    """Verify Scenario 3: Real-Time Typing Search Combined with Active Filters and Enter Focus."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = MOCK_HIERARCHICAL_ASSETS
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause(0.1)
+
+        modal = app.screen
+        modal.query_one("#select-class", Select).value = "Stocks"
+        await pilot.pause(0.1)
+        modal.query_one("#select-region", Select).value = "US"
+        await pilot.pause(0.1)
+        modal.query_one("#select-exchange", Select).value = "Nasdaq"
+        await pilot.pause(0.1)
+
+        # Type NVDA in search input
+        search_input = modal.query_one("#asset-search-input", Input)
+        search_input.value = "NVDA"
+        await pilot.pause(0.1)
+
+        # Table instantly filtered in-memory to 1 asset
+        table = modal.query_one("#assets-data-table", DataTable)
+        assert table.row_count == 1
+        assert table.get_row_at(0)[0].plain == "NVDA"
+
+        # Status bar format
+        status_bar = modal.query_one("#status-bar", Static)
+        assert 'Showing 1 of 8 assets matching [Stocks > US > Nasdaq | "NVDA"]' in str(status_bar.content)
+
+        # Focus search input and press Enter
+        search_input.focus()
+        await pilot.pause(0.1)
+        assert search_input.has_focus
+
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert table.has_focus
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_scenario_4_cascading_reset_on_parent_change():
+    """Verify Scenario 4: Cascading Reset on Parent Category Change."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = MOCK_HIERARCHICAL_ASSETS
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause(0.1)
+
+        modal = app.screen
+        class_select = modal.query_one("#select-class", Select)
+        region_select = modal.query_one("#select-region", Select)
+        exchange_select = modal.query_one("#select-exchange", Select)
+
+        # Setup: Stocks > US > Nasdaq
+        class_select.value = "Stocks"
+        await pilot.pause(0.1)
+        region_select.value = "US"
+        await pilot.pause(0.1)
+        exchange_select.value = "Nasdaq"
+        await pilot.pause(0.1)
+        assert exchange_select.value == "Nasdaq"
+
+        # Change Class to Forex
+        class_select.value = "Forex"
+        await pilot.pause(0.1)
+
+        # Region resets to "ALL", enabled, and populates with Forex regions (Majors)
+        assert region_select.value == "ALL"
+        assert region_select.disabled is False
+        region_options = [opt[1] for opt in region_select._options]
+        assert "Majors" in region_options
+
+        # Exchange resets to "ALL" and disabled
+        assert exchange_select.value == "ALL"
+        assert exchange_select.disabled is True
+
+        # Table displays only Forex assets (2 items: EURUSD, GBPUSD)
+        table = modal.query_one("#assets-data-table", DataTable)
+        assert table.row_count == 2
+        for r_idx in range(table.row_count):
+            assert table.get_row_at(r_idx)[2] == "Forex"
+
+
+@pytest.mark.asyncio
+async def test_asset_explorer_scenario_5_filter_reset_via_f4_and_gateway_retry():
+    """Verify Scenario 5: Filter Reset via Hotkey F4, Reset Button, and Gateway Retry."""
+    mock_client = AsyncMock(spec=DarwinApiClient)
+    mock_client.get_account_status.return_value = ConnectionStatus(
+        status=ConnectionState.CONNECTED,
+        server="Darwinex-Live",
+        account_info=AccountInfo(login=4000073238, server="Darwinex-Live"),
+    )
+    mock_client.get_positions.return_value = []
+    mock_client.get_strategy_status.return_value = {"status": "IDLE"}
+    mock_client.get_assets.return_value = MOCK_HIERARCHICAL_ASSETS
+
+    app = DarwinTraderApp(api_client=mock_client)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause(0.1)
+
+        modal = app.screen
+        modal.query_one("#select-class", Select).value = "Stocks"
+        await pilot.pause(0.1)
+        modal.query_one("#select-region", Select).value = "US"
+        await pilot.pause(0.1)
+        modal.query_one("#select-exchange", Select).value = "Nasdaq"
+        await pilot.pause(0.1)
+        search_input = modal.query_one("#asset-search-input", Input)
+        search_input.value = "NVDA"
+        await pilot.pause(0.1)
+
+        table = modal.query_one("#assets-data-table", DataTable)
+        assert table.row_count == 1
+
+        # Press F4 hotkey to reset
+        await pilot.press("f4")
+        await pilot.pause(0.1)
+
+        assert modal.query_one("#select-class", Select).value == "ALL"
+        assert modal.query_one("#select-region", Select).value == "ALL"
+        assert modal.query_one("#select-region", Select).disabled is True
+        assert modal.query_one("#select-exchange", Select).value == "ALL"
+        assert modal.query_one("#select-exchange", Select).disabled is True
+        assert search_input.value == ""
+        assert table.row_count == 8
+
+        # Test Reset Button click as well
+        modal.query_one("#select-class", Select).value = "Stocks"
+        await pilot.pause(0.1)
+        assert table.row_count == 4
+        modal.query_one("#btn-reset-filters", Button).press()
+        await pilot.pause(0.1)
+        assert modal.query_one("#select-class", Select).value == "ALL"
+        assert table.row_count == 8
+
+        # Test Gateway Retry when catalog was empty
+        modal._all_assets = []
+        mock_client.get_assets.return_value = [MOCK_HIERARCHICAL_ASSETS[0]]
+        await pilot.press("f4")
+        await pilot.pause(0.1)
+        assert table.row_count == 1
 
 
 @pytest.mark.asyncio
