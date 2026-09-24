@@ -1,6 +1,6 @@
 """
-CLI Ingestion Tool for Historical Market Data (OHLCV).
-Provides non-interactive command 'sync-history' supporting --category, --symbol, --timeframe, and --fresh flags.
+CLI Ingestion, Purge, and Analysis Tools for Historical Market Data (OHLCV).
+Provides non-interactive commands 'sync-history', 'purge-history', and 'committee'.
 """
 import argparse
 import asyncio
@@ -235,6 +235,100 @@ def handle_sync_history(args: argparse.Namespace) -> int:
         return 0
 
 
+def handle_purge_history(args: argparse.Namespace) -> int:
+    """Executes historical rates purge based on CLI arguments with confirmation and safety guards."""
+    raw_symbol = getattr(args, "symbol", None)
+    all_flag = bool(getattr(args, "all", False))
+    raw_category = getattr(args, "category", None)
+
+    # 1. Fast-fail guard: Must specify at least one target (--symbol, --category, or --all)
+    if not all_flag and raw_symbol is None and raw_category is None:
+        print("Error: Target required. Please specify --symbol, --category, or --all.")
+        return 1
+
+    # 2. Fast-fail validation on empty or whitespace-only --symbol input
+    symbols: Optional[List[str]] = None
+    if raw_symbol is not None:
+        symbols = parse_symbols(raw_symbol)
+        if not symbols:
+            print("Error: No valid symbols provided.")
+            return 1
+
+    if not all_flag and not symbols and raw_category is None:
+        print("Error: Target required. Please specify --symbol, --category, or --all.")
+        return 1
+
+    # 3. Category resolution
+    if not all_flag and symbols is None and raw_category is not None:
+        cat = raw_category.strip().lower()
+        config = StrategyConfig()
+        connector = MT5Connector(config)
+        ok, err = connector.initialize()
+        if not ok:
+            print(f"Error: Connector initialization failed: {err}")
+            return 1
+        try:
+            assets = connector.get_available_assets(category=cat)
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            return 1
+        symbols = [a.symbol for a in assets]
+        if not symbols:
+            print(f"Error: No assets found for category '{cat}'.")
+            return 1
+
+    # 4. Timeframe validation and normalization
+    raw_tf = (getattr(args, "timeframe", None) or "all").strip().upper()
+    if raw_tf == "ALL":
+        target_tf = None
+    elif raw_tf in TIMEFRAME_TO_MT5:
+        target_tf = raw_tf
+    else:
+        supported = list(TIMEFRAME_TO_MT5.keys()) + ["ALL"]
+        print(f"Error: Unsupported timeframe '{raw_tf}'. Supported: {', '.join(supported)}")
+        return 1
+
+    # 5. Interactive confirmation & non-interactive safety guards
+    yes_flag = bool(getattr(args, "yes", False))
+    if not yes_flag:
+        is_interactive = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+        if not is_interactive:
+            print("Error: Confirmation required. Use -y or --yes in non-interactive environments.")
+            return 1
+
+        # Interactive confirmation prompt
+        if all_flag:
+            prompt_msg = "Are you sure you want to purge ALL historical data from the database? [y/N]: "
+        elif symbols:
+            sym_desc = ", ".join(symbols)
+            tf_desc = f" [{raw_tf}]" if target_tf else " [all timeframes]"
+            prompt_msg = f"Are you sure you want to purge historical data for {sym_desc}{tf_desc}? [y/N]: "
+        else:
+            prompt_msg = "Are you sure you want to proceed with database purge? [y/N]: "
+
+        try:
+            user_input = input(prompt_msg).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nOperation cancelled by user.")
+            return 0
+
+        if user_input not in ("y", "yes"):
+            print("Operation cancelled by user.")
+            return 0
+
+    # 6. Database purge execution
+    db_path = getattr(args, "db_path", None)
+    db = HistoricalRatesDB(db_path=db_path) if db_path else HistoricalRatesDB()
+
+    if all_flag:
+        deleted = db.clear_rates(timeframe=target_tf)
+    else:
+        deleted = db.clear_rates(symbols=symbols, timeframe=target_tf)
+
+    print(f"Successfully purged {deleted} historical rate record(s).")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI main entry point for Strategy Engine commands."""
     parser = argparse.ArgumentParser(
@@ -291,6 +385,49 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Execute against mock MT5 simulation",
     )
     sync_parser.add_argument(
+        "--db-path",
+        type=str,
+        default=None,
+        help="Custom SQLite database file path (optional)",
+    )
+
+    purge_parser = subparsers.add_parser(
+        "purge-history",
+        help="Purge historical OHLCV market data from local SQLite storage",
+    )
+    purge_parser.add_argument(
+        "--symbol",
+        type=str,
+        action="append",
+        default=None,
+        help="Target asset symbol(s) to purge (e.g. AMZN, NVDA or comma-separated AAPL,MSFT)",
+    )
+    purge_parser.add_argument(
+        "--category",
+        type=str,
+        default=None,
+        help="Asset category filter (all, stocks, etfs, forex)",
+    )
+    purge_parser.add_argument(
+        "--timeframe",
+        type=str,
+        default="all",
+        help="Target timeframe to purge (default: all)",
+    )
+    purge_parser.add_argument(
+        "--all",
+        action="store_true",
+        default=False,
+        help="Purge entire database across all symbols and timeframes",
+    )
+    purge_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        default=False,
+        help="Bypass confirmation prompt",
+    )
+    purge_parser.add_argument(
         "--db-path",
         type=str,
         default=None,
@@ -366,6 +503,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "sync-history":
         return handle_sync_history(args)
+    elif args.command == "purge-history":
+        return handle_purge_history(args)
     elif args.command == "committee":
         return handle_committee(args)
 

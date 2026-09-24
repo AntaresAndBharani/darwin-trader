@@ -24,7 +24,6 @@ class HistoricalRatesDB:
 
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=self.busy_timeout / 1000.0)
-        conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute(f"PRAGMA busy_timeout={self.busy_timeout};")
         conn.row_factory = sqlite3.Row
@@ -32,6 +31,7 @@ class HistoricalRatesDB:
 
     def _init_db(self) -> None:
         with self._get_connection() as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS rates (
@@ -169,20 +169,82 @@ class HistoricalRatesDB:
             ]
         return bars, total_bars
 
-    def clear_rates(self, symbol: Optional[str] = None, timeframe: Optional[str] = None) -> int:
+    def clear_rates(
+        self,
+        symbol: Optional[Union[str, List[str]]] = None,
+        symbols: Optional[Union[List[str], str]] = None,
+        timeframe: Optional[str] = None,
+    ) -> int:
         """
-        Deletes cached rates for a given symbol (and optional timeframe).
-        If symbol is None, clears all rates in the database.
-        Returns number of deleted rows.
+        Deletes cached rates for given symbol(s) (and optional timeframe).
+        Accepts both single 'symbol' and multiple 'symbols' (list or comma-separated string).
+        If both symbol and symbols are None, clears rates across all symbols.
+        Normalizes 'timeframe': if None or 'ALL' (case-insensitive), omits timeframe clause.
+        Returns total number of deleted rows.
         """
-        with self._get_connection() as conn:
-            if symbol is None:
-                cursor = conn.execute("DELETE FROM rates;")
-            elif timeframe is None:
-                cursor = conn.execute("DELETE FROM rates WHERE symbol = ?;", (symbol,))
+        # Backward compatibility for positional clear_rates(sym, "D1")
+        if timeframe is None and isinstance(symbols, str):
+            symbols_upper = symbols.strip().upper()
+            if symbols_upper in ("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1", "ALL"):
+                timeframe = symbols
+                symbols = None
+
+        # Normalize timeframe clause: None or 'ALL' omits timeframe filter
+        norm_tf: Optional[str] = None
+        if timeframe is not None:
+            tf_clean = timeframe.strip().upper()
+            if tf_clean != "ALL":
+                norm_tf = tf_clean
+
+        # Normalize target symbols
+        collected: List[str] = []
+        if symbols is not None:
+            if isinstance(symbols, str):
+                items = [s.strip().upper() for s in symbols.split(",") if s.strip()]
             else:
-                cursor = conn.execute(
-                    "DELETE FROM rates WHERE symbol = ? AND timeframe = ?;",
-                    (symbol, timeframe),
-                )
+                items = [str(s).strip().upper() for s in symbols if s and str(s).strip()]
+            collected.extend(items)
+
+        if symbol is not None:
+            if isinstance(symbol, str):
+                sym_items = [s.strip().upper() for s in symbol.split(",") if s.strip()]
+            else:
+                sym_items = [str(s).strip().upper() for s in symbol if s and str(s).strip()]
+            for s_clean in sym_items:
+                if s_clean and s_clean not in collected:
+                    collected.append(s_clean)
+
+        target_symbols: Optional[List[str]] = None
+        if symbols is not None or symbol is not None:
+            target_symbols = collected
+            # If target list was explicitly provided but is empty, nothing to delete
+            if not target_symbols:
+                return 0
+
+        with self._get_connection() as conn:
+            if target_symbols is None:
+                if norm_tf is None:
+                    cursor = conn.execute("DELETE FROM rates;")
+                else:
+                    cursor = conn.execute("DELETE FROM rates WHERE timeframe = ?;", (norm_tf,))
+            elif len(target_symbols) == 1:
+                if norm_tf is None:
+                    cursor = conn.execute("DELETE FROM rates WHERE symbol = ?;", (target_symbols[0],))
+                else:
+                    cursor = conn.execute(
+                        "DELETE FROM rates WHERE symbol = ? AND timeframe = ?;",
+                        (target_symbols[0], norm_tf),
+                    )
+            else:
+                placeholders = ", ".join("?" for _ in target_symbols)
+                if norm_tf is None:
+                    cursor = conn.execute(
+                        f"DELETE FROM rates WHERE symbol IN ({placeholders});",
+                        tuple(target_symbols),
+                    )
+                else:
+                    cursor = conn.execute(
+                        f"DELETE FROM rates WHERE symbol IN ({placeholders}) AND timeframe = ?;",
+                        (*target_symbols, norm_tf),
+                    )
             return cursor.rowcount

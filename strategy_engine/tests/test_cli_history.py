@@ -1,6 +1,6 @@
 """
-Unit and integration tests for CLI sync-history command and parallel multi-symbol worker pool.
-Covers Gherkin scenarios for Issue #93 (Slice 1 of Parent #92).
+Unit and integration tests for CLI sync-history and purge-history commands.
+Covers Gherkin scenarios for Issue #93 (Slice 1) and Issue #94 (Slice 2) of Parent #92.
 """
 import asyncio
 import pytest
@@ -9,7 +9,7 @@ from unittest.mock import patch
 from strategy_engine.cli import main as cli_main, parse_symbols
 from strategy_engine.config import StrategyConfig
 from strategy_engine.historical_db import HistoricalRatesDB
-from strategy_engine.models import HistoricalSyncStatus
+from strategy_engine.models import HistoricalSyncStatus, HistoricalBar, AssetInfo
 from strategy_engine.mt5_connector import MT5Connector
 
 
@@ -308,3 +308,329 @@ class TestCliHistoryParallelSync:
         assert rc == 0
         assert temp_db.get_total_bars("AAPL", "D1") == 100
         assert temp_db.get_total_bars("MSFT", "D1") == 100
+
+
+class TestCliHistoryGranularPurge:
+    """Tests covering Scenario 3, 4, 5, 6, 10, 11 for Issue #94 (Slice 2 of Parent #92)."""
+
+    def test_scenario_3_granular_timeframe_purge_single_asset(self, temp_db, capsys):
+        """
+        Scenario 3: Granular Timeframe Purge for a Single Asset.
+        Given asset "AMZN" has cached historical bars across timeframes "D1" and "H1".
+        When user executes: purge-history --symbol AMZN --timeframe H1 -y
+        Then CLI deletes all records where symbol = 'AMZN' AND timeframe = 'H1'
+        And leaves all 'D1' records for AMZN intact.
+        And outputs count of purged rows with exit code 0.
+        """
+        db_path = temp_db.db_path
+        bars_d1 = [
+            HistoricalBar(symbol="AMZN", timeframe="D1", time=1700000000 + i, open=100.0, high=105.0, low=95.0, close=102.0)
+            for i in range(10)
+        ]
+        bars_h1 = [
+            HistoricalBar(symbol="AMZN", timeframe="H1", time=1700000000 + i, open=100.0, high=105.0, low=95.0, close=102.0)
+            for i in range(15)
+        ]
+        temp_db.insert_rates(bars_d1)
+        temp_db.insert_rates(bars_h1)
+        assert temp_db.get_total_bars("AMZN", "D1") == 10
+        assert temp_db.get_total_bars("AMZN", "H1") == 15
+
+        rc = cli_main([
+            "purge-history",
+            "--symbol", "AMZN",
+            "--timeframe", "H1",
+            "-y",
+            "--db-path", db_path,
+        ])
+        assert rc == 0
+        captured = capsys.readouterr().out
+        assert "15" in captured
+        assert temp_db.get_total_bars("AMZN", "H1") == 0
+        assert temp_db.get_total_bars("AMZN", "D1") == 10
+
+    def test_scenario_4_category_wide_purge(self, temp_db, capsys):
+        """
+        Scenario 4: Category-Wide Purge.
+        Given multiple Forex assets ("EURUSD", "GBPUSD") have cached rates in SQLite.
+        When user executes: purge-history --category forex -y
+        Then CLI resolves all assets belonging to category "forex",
+        deletes all rates records associated with those forex symbols,
+        and outputs total count of deleted rows with exit code 0.
+        """
+        db_path = temp_db.db_path
+        bars_eur = [
+            HistoricalBar(symbol="EURUSD", timeframe="D1", time=1700000000 + i, open=1.05, high=1.06, low=1.04, close=1.055)
+            for i in range(12)
+        ]
+        bars_gbp = [
+            HistoricalBar(symbol="GBPUSD", timeframe="D1", time=1700000000 + i, open=1.25, high=1.26, low=1.24, close=1.255)
+            for i in range(8)
+        ]
+        bars_aapl = [
+            HistoricalBar(symbol="AAPL", timeframe="D1", time=1700000000 + i, open=150.0, high=155.0, low=149.0, close=152.0)
+            for i in range(5)
+        ]
+        temp_db.insert_rates(bars_eur)
+        temp_db.insert_rates(bars_gbp)
+        temp_db.insert_rates(bars_aapl)
+        assert temp_db.get_total_bars("EURUSD", "D1") == 12
+        assert temp_db.get_total_bars("GBPUSD", "D1") == 8
+        assert temp_db.get_total_bars("AAPL", "D1") == 5
+
+        mock_forex_assets = [
+            AssetInfo(symbol="EURUSD", description="EUR/USD", category="Forex/Majors"),
+            AssetInfo(symbol="GBPUSD", description="GBP/USD", category="Forex/Majors"),
+        ]
+        with patch.object(MT5Connector, "get_available_assets", return_value=mock_forex_assets):
+            rc = cli_main([
+                "purge-history",
+                "--category", "forex",
+                "-y",
+                "--db-path", db_path,
+            ])
+            assert rc == 0
+            captured = capsys.readouterr().out
+            assert "20" in captured
+            assert temp_db.get_total_bars("EURUSD", "D1") == 0
+            assert temp_db.get_total_bars("GBPUSD", "D1") == 0
+            assert temp_db.get_total_bars("AAPL", "D1") == 5
+
+    def test_scenario_5_safety_guard_no_target_specified(self, temp_db, capsys):
+        """
+        Scenario 5: Safety Guard Against Accidental Total Database Wipe.
+        Given user invokes `purge-history` without specifying `--all`, `--symbol`, or `--category`.
+        Aborts immediately with exit code 1.
+        Displays error explaining a specific target is required.
+        Leaves database records untouched.
+        """
+        db_path = temp_db.db_path
+        bars = [
+            HistoricalBar(symbol="AAPL", timeframe="D1", time=1700000000 + i, open=100.0, high=105.0, low=95.0, close=102.0)
+            for i in range(5)
+        ]
+        temp_db.insert_rates(bars)
+        assert temp_db.get_total_bars("AAPL", "D1") == 5
+
+        rc = cli_main([
+            "purge-history",
+            "--db-path", db_path,
+        ])
+        assert rc == 1
+        captured = capsys.readouterr().out
+        assert "Error: Target required. Please specify --symbol, --category, or --all." in captured
+        assert temp_db.get_total_bars("AAPL", "D1") == 5
+
+    def test_scenario_5_empty_whitespace_symbol_safety_guard(self, temp_db, capsys):
+        """
+        Empty or whitespace-only --symbol input fails fast with exit code 1.
+        """
+        db_path = temp_db.db_path
+        rc = cli_main([
+            "purge-history",
+            "--symbol", " , ",
+            "--db-path", db_path,
+        ])
+        assert rc == 1
+        captured = capsys.readouterr().out
+        assert "Error: No valid symbols provided." in captured
+
+    def test_scenario_6_non_interactive_confirmation_abort(self, temp_db, capsys):
+        """
+        Scenario 6: Non-Interactive Confirmation Abort in Headless Mode.
+        Given stdin is not attached to an interactive terminal.
+        When user executes `purge-history --all` without `-y`.
+        Aborts immediately with exit code 1.
+        Prints error requiring `-y` / `--yes`.
+        No database records are modified.
+        """
+        db_path = temp_db.db_path
+        bars = [
+            HistoricalBar(symbol="AAPL", timeframe="D1", time=1700000000 + i, open=100.0, high=105.0, low=95.0, close=102.0)
+            for i in range(5)
+        ]
+        temp_db.insert_rates(bars)
+
+        with patch("sys.stdin.isatty", return_value=False):
+            rc = cli_main([
+                "purge-history",
+                "--all",
+                "--db-path", db_path,
+            ])
+            assert rc == 1
+            captured = capsys.readouterr().out
+            assert "Error: Confirmation required. Use -y or --yes in non-interactive environments." in captured
+            assert temp_db.get_total_bars("AAPL", "D1") == 5
+
+    def test_scenario_10_granular_timeframe_purge_all(self, temp_db, capsys):
+        """
+        Scenario 10: Granular Timeframe Purge for All Timeframes (--timeframe all).
+        Given asset "TSLA" has cached bars across "M1", "H1", and "D1" timeframes.
+        When user executes `purge-history --symbol TSLA --timeframe all -y`.
+        Then clear_rates() omits timeframe filter clause, deletes all records for TSLA,
+        and outputs count of all purged rows with exit code 0.
+        """
+        db_path = temp_db.db_path
+        bars_m1 = [HistoricalBar(symbol="TSLA", timeframe="M1", time=1700000000 + i, open=200.0, high=201.0, low=199.0, close=200.5) for i in range(10)]
+        bars_h1 = [HistoricalBar(symbol="TSLA", timeframe="H1", time=1700000000 + i, open=200.0, high=205.0, low=198.0, close=202.0) for i in range(8)]
+        bars_d1 = [HistoricalBar(symbol="TSLA", timeframe="D1", time=1700000000 + i, open=200.0, high=210.0, low=195.0, close=208.0) for i in range(6)]
+        bars_other = [HistoricalBar(symbol="AAPL", timeframe="D1", time=1700000000 + i, open=150.0, high=155.0, low=149.0, close=152.0) for i in range(5)]
+
+        temp_db.insert_rates(bars_m1 + bars_h1 + bars_d1 + bars_other)
+        assert temp_db.get_total_bars("TSLA", "M1") == 10
+        assert temp_db.get_total_bars("TSLA", "H1") == 8
+        assert temp_db.get_total_bars("TSLA", "D1") == 6
+        assert temp_db.get_total_bars("AAPL", "D1") == 5
+
+        rc = cli_main([
+            "purge-history",
+            "--symbol", "TSLA",
+            "--timeframe", "all",
+            "-y",
+            "--db-path", db_path,
+        ])
+        assert rc == 0
+        captured = capsys.readouterr().out
+        assert "24" in captured
+        assert temp_db.get_total_bars("TSLA", "M1") == 0
+        assert temp_db.get_total_bars("TSLA", "H1") == 0
+        assert temp_db.get_total_bars("TSLA", "D1") == 0
+        assert temp_db.get_total_bars("AAPL", "D1") == 5
+
+    def test_scenario_11_user_cancellation_interactive_purge(self, temp_db, capsys):
+        """
+        Scenario 11: User Cancellation of Interactive Destructive Purge.
+        Given stdin is attached to an interactive terminal.
+        When user executes `purge-history --all`.
+        And responds 'n' to confirmation prompt "Are you sure you want to purge ALL historical data from the database? [y/N]: ".
+        Then CLI prints "Operation cancelled by user.", aborts safely with exit code 0, leaves records untouched.
+        """
+        db_path = temp_db.db_path
+        bars = [
+            HistoricalBar(symbol="AAPL", timeframe="D1", time=1700000000 + i, open=100.0, high=105.0, low=95.0, close=102.0)
+            for i in range(5)
+        ]
+        temp_db.insert_rates(bars)
+
+        with patch("sys.stdin.isatty", return_value=True), \
+             patch("builtins.input", return_value="n") as mock_input:
+            rc = cli_main([
+                "purge-history",
+                "--all",
+                "--db-path", db_path,
+            ])
+            assert rc == 0
+            mock_input.assert_called_once_with("Are you sure you want to purge ALL historical data from the database? [y/N]: ")
+            captured = capsys.readouterr().out
+            assert "Operation cancelled by user." in captured
+            assert temp_db.get_total_bars("AAPL", "D1") == 5
+
+    def test_interactive_confirmation_user_accepts(self, temp_db, capsys):
+        """
+        Interactive confirmation accepted ('y') executes purge and exits with 0.
+        """
+        db_path = temp_db.db_path
+        bars = [
+            HistoricalBar(symbol="AAPL", timeframe="D1", time=1700000000 + i, open=100.0, high=105.0, low=95.0, close=102.0)
+            for i in range(5)
+        ]
+        temp_db.insert_rates(bars)
+
+        with patch("sys.stdin.isatty", return_value=True), \
+             patch("builtins.input", return_value="y") as mock_input:
+            rc = cli_main([
+                "purge-history",
+                "--all",
+                "--db-path", db_path,
+            ])
+            assert rc == 0
+            mock_input.assert_called_once_with("Are you sure you want to purge ALL historical data from the database? [y/N]: ")
+            captured = capsys.readouterr().out
+            assert "Successfully purged 5" in captured
+            assert temp_db.get_total_bars("AAPL", "D1") == 0
+
+    def test_interactive_confirmation_symbol_prompt_cancellation(self, temp_db, capsys):
+        """
+        Interactive confirmation on --symbol prompt cancelled by user.
+        """
+        db_path = temp_db.db_path
+        bars = [
+            HistoricalBar(symbol="AAPL", timeframe="D1", time=1700000000 + i, open=100.0, high=105.0, low=95.0, close=102.0)
+            for i in range(5)
+        ]
+        temp_db.insert_rates(bars)
+
+        with patch("sys.stdin.isatty", return_value=True), \
+             patch("builtins.input", return_value="no") as mock_input:
+            rc = cli_main([
+                "purge-history",
+                "--symbol", "AAPL",
+                "--timeframe", "D1",
+                "--db-path", db_path,
+            ])
+            assert rc == 0
+            assert "AAPL" in mock_input.call_args[0][0]
+            assert "D1" in mock_input.call_args[0][0]
+            captured = capsys.readouterr().out
+            assert "Operation cancelled by user." in captured
+            assert temp_db.get_total_bars("AAPL", "D1") == 5
+
+    def test_purge_unsupported_timeframe(self, temp_db, capsys):
+        """
+        Specifying invalid timeframe returns exit code 1.
+        """
+        db_path = temp_db.db_path
+        rc = cli_main([
+            "purge-history",
+            "--symbol", "AAPL",
+            "--timeframe", "INVALID_TF",
+            "-y",
+            "--db-path", db_path,
+        ])
+        assert rc == 1
+        captured = capsys.readouterr().out
+        assert "Error: Unsupported timeframe 'INVALID_TF'." in captured
+
+    def test_purge_multiple_symbols_and_repeated_flags(self, temp_db, capsys):
+        """
+        Purges multiple symbols specified via comma or repeated flags.
+        """
+        db_path = temp_db.db_path
+        bars1 = [HistoricalBar(symbol="AAPL", timeframe="D1", time=1700000000 + i, open=100.0, high=105.0, low=95.0, close=102.0) for i in range(4)]
+        bars2 = [HistoricalBar(symbol="MSFT", timeframe="D1", time=1700000000 + i, open=200.0, high=205.0, low=195.0, close=202.0) for i in range(6)]
+        bars3 = [HistoricalBar(symbol="NVDA", timeframe="D1", time=1700000000 + i, open=300.0, high=305.0, low=295.0, close=302.0) for i in range(8)]
+        temp_db.insert_rates(bars1 + bars2 + bars3)
+
+        rc = cli_main([
+            "purge-history",
+            "--symbol", "AAPL,MSFT",
+            "-y",
+            "--db-path", db_path,
+        ])
+        assert rc == 0
+        captured = capsys.readouterr().out
+        assert "10" in captured
+        assert temp_db.get_total_bars("AAPL", "D1") == 0
+        assert temp_db.get_total_bars("MSFT", "D1") == 0
+        assert temp_db.get_total_bars("NVDA", "D1") == 8
+
+    def test_clear_rates_edge_cases_and_wal_pragma(self, temp_db):
+        """
+        Verifies clear_rates unit behaviors:
+        - clear_rates with empty list returns 0
+        - clear_rates with timeframe ALL normalizes to None
+        - clear_rates with symbol list
+        - PRAGMA journal_mode is WAL
+        """
+        # Empty list is no-op
+        assert temp_db.clear_rates(symbols=[]) == 0
+
+        # Insert some bars
+        bars = [HistoricalBar(symbol="TEST", timeframe="D1", time=1700000000 + i, open=10.0, high=11.0, low=9.0, close=10.5) for i in range(5)]
+        temp_db.insert_rates(bars)
+        assert temp_db.get_total_bars("TEST", "D1") == 5
+
+        # Purge with timeframe="ALL"
+        deleted = temp_db.clear_rates(symbols=["TEST"], timeframe="ALL")
+        assert deleted == 5
+        assert temp_db.get_total_bars("TEST", "D1") == 0
