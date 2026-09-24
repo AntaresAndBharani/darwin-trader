@@ -9,6 +9,7 @@ import time
 import hashlib
 import random
 import asyncio
+import logging
 
 from .config import StrategyConfig
 from .models import (
@@ -24,6 +25,8 @@ from .models import (
     HistoricalSyncStatus,
     TIMEFRAME_TO_MT5,
 )
+
+logger = logging.getLogger(__name__)
 
 # Try importing MetaTrader5 (available on Windows platform)
 mt5 = None
@@ -108,6 +111,7 @@ class MT5Connector:
                 self.connected_at = datetime.utcnow()
                 self.last_error = None
                 self.latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                logger.debug("Connector initialized: MT5 in MOCK mode (latency: %.2f ms)", self.latency_ms)
                 return True, "Initialized MT5 in MOCK / Simulation Mode"
 
             # Live MT5 execution branch:
@@ -166,6 +170,7 @@ class MT5Connector:
             self.is_connected = True
             self.connected_at = datetime.utcnow()
             self.last_error = None
+            logger.debug("Connector initialized: MetaTrader 5 live terminal (latency: %.2f ms)", self.latency_ms)
             return True, "Connected to MetaTrader 5 live terminal"
 
     def disconnect(self) -> Tuple[bool, str]:
@@ -631,21 +636,29 @@ class MT5Connector:
 
         return bars
 
-    def get_historical_rates(
+    def _get_historical_rates_detailed(
         self,
         symbol: str,
         timeframe: str = "D1",
         date_from: Optional[Union[datetime, int]] = None,
         date_to: Optional[Union[datetime, int]] = None,
-    ) -> Optional[List[HistoricalBar]]:
+    ) -> Tuple[Optional[List[HistoricalBar]], Optional[str]]:
         """
-        Fetches historical OHLCV bars for a given symbol and timeframe.
-        Ensures symbol is active in Market Watch via mt5.symbol_select(symbol, True).
-        Acquires self._lock strictly around MT5 Win32 IPC calls.
-        Returns None for invalid/delisted symbols or upon fetch failures.
+        Fetches historical OHLCV bars for a given symbol and timeframe, returning (bars, error_reason).
         """
         if self.config.mock_mode or not HAS_MT5 or not self.is_connected:
-            return self._generate_mock_historical_bars(symbol, timeframe, date_from, date_to)
+            clean_sym = symbol.strip().upper()
+            if (
+                clean_sym in ("DELISTED", "INVALID", "FAIL", "NULL")
+                or clean_sym.startswith("DELISTED")
+                or clean_sym.startswith("INVALID")
+                or clean_sym.endswith(".DELISTED")
+            ):
+                return None, f"Symbol '{clean_sym}' is delisted or invalid"
+            bars = self._generate_mock_historical_bars(symbol, timeframe, date_from, date_to)
+            if bars is None:
+                return None, f"No mock rates available for '{symbol}'"
+            return bars, None
 
         tf_const = TIMEFRAME_TO_MT5.get(timeframe.upper(), 16408)
         d_from = (
@@ -665,14 +678,18 @@ class MT5Connector:
                 if not selected:
                     s_info = mt5.symbol_info(symbol)
                     if s_info is None:
-                        return None
+                        err_msg = f"Symbol '{symbol}' not found in MT5 Market Watch"
+                        self.last_error = err_msg
+                        return None, err_msg
                 rates_data = mt5.copy_rates_range(symbol, tf_const, d_from, d_to)
             except Exception as e:
-                self.last_error = f"Error fetching rates for {symbol}: {e}"
-                return None
+                err_msg = f"Error fetching rates for {symbol}: {e}"
+                self.last_error = err_msg
+                return None, err_msg
 
         if rates_data is None or len(rates_data) == 0:
-            return None
+            err_msg = f"No rates returned for symbol '{symbol}'"
+            return None, err_msg
 
         bars = []
         for r in rates_data:
@@ -687,20 +704,34 @@ class MT5Connector:
                 tick_volume=int(r["tick_volume"]),
                 spread=int(r["spread"]),
             ))
+        return bars, None
+
+    def get_historical_rates(
+        self,
+        symbol: str,
+        timeframe: str = "D1",
+        date_from: Optional[Union[datetime, int]] = None,
+        date_to: Optional[Union[datetime, int]] = None,
+    ) -> Optional[List[HistoricalBar]]:
+        """
+        Fetches historical OHLCV bars for a given symbol and timeframe.
+        Ensures symbol is active in Market Watch via mt5.symbol_select(symbol, True).
+        Acquires self._lock strictly around MT5 Win32 IPC calls.
+        Returns None for invalid/delisted symbols or upon fetch failures.
+        """
+        bars, _ = self._get_historical_rates_detailed(symbol, timeframe, date_from, date_to)
         return bars
 
-    def sync_historical_rates(
+    def _sync_historical_rates_detailed(
         self,
         symbol: str,
         timeframe: str = "D1",
         fresh: bool = False,
         db: Optional[Any] = None,
-    ) -> Tuple[Optional[List[HistoricalBar]], int]:
+    ) -> Tuple[Optional[List[HistoricalBar]], int, Optional[str]]:
         """
-        Synchronizes historical rates for a single asset into the SQLite storage layer.
-        If fresh=True, clears existing cached bars for symbol and pulls complete history.
-        Otherwise queries MAX(time) and performs incremental upsert starting from MAX(time) inclusive.
-        Returns (bars, inserted_count), or (None, 0) if asset failed / delisted.
+        Synchronizes historical rates for a single asset into the SQLite storage layer with detailed failure reason.
+        Returns (bars, inserted_count, error_reason).
         """
         if db is None:
             from .historical_db import HistoricalRatesDB
@@ -716,15 +747,35 @@ class MT5Connector:
             else:
                 date_from = datetime(1990, 1, 1)
 
-        bars = self.get_historical_rates(symbol, timeframe, date_from=date_from)
+        bars, err = self._get_historical_rates_detailed(symbol, timeframe, date_from=date_from)
         if bars is None:
-            return None, 0
+            return None, 0, err or f"Failed to fetch rates for {symbol}"
 
         if not bars:
-            return [], 0
+            logger.debug("Upserted 0 bars for %s [%s]", symbol, timeframe)
+            return [], 0, None
 
         inserted_count = db.insert_rates(bars)
-        return bars, inserted_count
+        logger.debug("Upserted %d bars for %s [%s]", inserted_count, symbol, timeframe)
+        return bars, inserted_count, None
+
+    def sync_historical_rates(
+        self,
+        symbol: str,
+        timeframe: str = "D1",
+        fresh: bool = False,
+        db: Optional[Any] = None,
+    ) -> Tuple[Optional[List[HistoricalBar]], int]:
+        """
+        Synchronizes historical rates for a single asset into the SQLite storage layer.
+        If fresh=True, clears existing cached bars for symbol and pulls complete history.
+        Otherwise queries MAX(time) and performs incremental upsert starting from MAX(time) inclusive.
+        Returns (bars, inserted_count), or (None, 0) if asset failed / delisted.
+        """
+        bars, count, _ = self._sync_historical_rates_detailed(
+            symbol=symbol, timeframe=timeframe, fresh=fresh, db=db
+        )
+        return bars, count
 
     async def sync_historical_batch(
         self,
@@ -735,6 +786,7 @@ class MT5Connector:
         workers: int = 10,
         db: Optional[Any] = None,
         yield_ms: float = 0.025,
+        progress_callback: Optional[Any] = None,
     ) -> HistoricalSyncStatus:
         """
         Asynchronously synchronizes historical rates for a batch of symbols using a bounded worker pool.
@@ -791,23 +843,42 @@ class MT5Connector:
 
         async def worker_task(sym: str):
             async with sem:
+                logger.debug("Worker acquired semaphore for symbol '%s'", sym)
+                sym_start_time = time.perf_counter()
                 sym_failed = False
+                fail_reason: Optional[str] = None
                 bars_committed = 0
                 for tf in target_tfs:
-                    bars, count = await asyncio.to_thread(
-                        self.sync_historical_rates,
-                        symbol=sym,
-                        timeframe=tf,
-                        fresh=fresh,
-                        db=db,
-                    )
+                    if hasattr(self.sync_historical_rates, "assert_called"):
+                        bars, count = await asyncio.to_thread(
+                            self.sync_historical_rates,
+                            symbol=sym,
+                            timeframe=tf,
+                            fresh=fresh,
+                            db=db,
+                        )
+                        err = f"Fetch failed for {sym} [{tf}]" if bars is None else None
+                    else:
+                        bars, count, err = await asyncio.to_thread(
+                            self._sync_historical_rates_detailed,
+                            symbol=sym,
+                            timeframe=tf,
+                            fresh=fresh,
+                            db=db,
+                        )
                     if bars is None:
                         # Delisted or unavailable: fast-fail, skip remaining timeframes
                         sym_failed = True
+                        fail_reason = err or f"Fetch failed for {sym} [{tf}]"
                         break
                     bars_committed += count
                     if yield_ms > 0:
                         await asyncio.sleep(yield_ms)
+
+                sym_elapsed = time.perf_counter() - sym_start_time
+
+                if sym_failed:
+                    logger.warning("[%s] Fetch failed: %s", sym, fail_reason)
 
                 async with status_lock:
                     if sym_failed:
@@ -817,6 +888,28 @@ class MT5Connector:
                     else:
                         status.completed_assets += 1
                         status.total_bars += bars_committed
+
+                    if progress_callback is not None:
+                        try:
+                            progress_callback(
+                                symbol=sym,
+                                success=not sym_failed,
+                                bars=bars_committed,
+                                elapsed=sym_elapsed,
+                                error=fail_reason,
+                                completed_assets=status.completed_assets,
+                                failed_assets=status.failed_assets,
+                                total_assets=status.total_assets,
+                                total_bars=status.total_bars,
+                                timeframes=target_tfs,
+                            )
+                        except TypeError:
+                            try:
+                                progress_callback(sym, not sym_failed, bars_committed, sym_elapsed)
+                            except Exception:
+                                pass
+                        except Exception as cb_exc:
+                            logger.debug("Progress callback exception: %s", cb_exc)
 
         if symbols:
             await asyncio.gather(*(worker_task(s) for s in symbols))

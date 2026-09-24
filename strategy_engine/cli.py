@@ -4,8 +4,23 @@ Provides non-interactive commands 'sync-history', 'purge-history', and 'committe
 """
 import argparse
 import asyncio
+import logging
 import sys
+import time
 from typing import List, Optional, Union
+
+try:
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+    from rich.console import Console
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
 
 from strategy_engine.config import StrategyConfig
 from strategy_engine.committee_calculator import calculate_committee_context
@@ -16,6 +31,31 @@ from strategy_engine.models import (
     CommitteeContext,
 )
 from strategy_engine.mt5_connector import MT5Connector
+
+logger = logging.getLogger("strategy_engine")
+
+
+def setup_cli_logging(level: int = logging.INFO, stream=None) -> logging.Logger:
+    """Configures the strategy_engine logger idempotently on stderr."""
+    eng_logger = logging.getLogger("strategy_engine")
+    eng_logger.setLevel(level)
+    eng_logger.propagate = False
+
+    for h in list(eng_logger.handlers):
+        eng_logger.removeHandler(h)
+        try:
+            h.close()
+        except Exception:
+            pass
+
+    target_stream = stream if stream is not None else sys.stderr
+    handler = logging.StreamHandler(target_stream)
+    handler.setLevel(level)
+    logging.addLevelName(logging.WARNING, "WARN")
+    formatter = logging.Formatter("[%(levelname)s] %(message)s")
+    handler.setFormatter(formatter)
+    eng_logger.addHandler(handler)
+    return eng_logger
 
 
 def format_committee_markdown(
@@ -99,6 +139,7 @@ def handle_committee(args: argparse.Namespace) -> int:
     entry_price = getattr(args, "entry_price", None)
     out_format = (getattr(args, "format", None) or "markdown").lower()
 
+    logger.debug("Computing committee context for symbol '%s' (benchmark: %s, mode: %s, direction: %s)", symbol, benchmark_sym, mode, direction)
     try:
         context = calculate_committee_context(
             symbol=symbol,
@@ -112,6 +153,8 @@ def handle_committee(args: argparse.Namespace) -> int:
     except Exception as exc:
         print(f"Error: Failed to compute committee context for '{symbol}': {exc}")
         return 1
+
+    logger.debug("Successfully computed committee context for %s (D1 bars: %d, H1 bars: %d)", symbol, context.d1_bars_count, context.h1_bars_count)
 
     if out_format == "json":
         print(context.model_dump_json(indent=2))
@@ -210,18 +253,104 @@ def handle_sync_history(args: argparse.Namespace) -> int:
 
     fresh = bool(getattr(args, "fresh", False))
     tf_str = "all" if raw_tf == "ALL" else ", ".join(target_timeframes)
-    print(f"Synchronizing historical rates for {len(symbols)} symbol(s) [timeframes={tf_str}, workers={workers}, fresh={fresh}]...")
+    logger.info(
+        "Synchronizing historical rates for %d symbol(s) [timeframes=%s, workers=%d, fresh=%s]...",
+        len(symbols),
+        tf_str,
+        workers,
+        fresh,
+    )
+
+    is_verbose = getattr(args, "verbose", False)
+    is_quiet = getattr(args, "quiet", False)
+    force_term = getattr(args, "force_terminal", False)
+    is_tty = force_term or (hasattr(sys.stderr, "isatty") and sys.stderr.isatty())
+    use_rich = HAS_RICH and is_tty and not is_quiet
+
+    progress = None
+    progress_task = None
+    overall_start = time.perf_counter()
+    last_decile = 0
+
+    if use_rich:
+        console = Console(file=sys.stderr, force_terminal=True)
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("• {task.completed}/{task.total} completed"),
+            TextColumn("({task.fields[remaining]} remaining)"),
+            TimeElapsedColumn(),
+            TextColumn("• {task.fields[rate]:.1f} bars/s"),
+            console=console,
+            transient=False,
+        )
+        progress_task = progress.add_task(
+            "Syncing",
+            total=len(symbols),
+            remaining=len(symbols),
+            rate=0.0,
+        )
+        progress.start()
+
+    def progress_callback(**kwargs):
+        nonlocal last_decile
+        sym = kwargs.get("symbol", "")
+        success = kwargs.get("success", True)
+        bars = kwargs.get("bars", 0)
+        elapsed = kwargs.get("elapsed", 0.0)
+        completed = kwargs.get("completed_assets", 0)
+        failed = kwargs.get("failed_assets", 0)
+        total = kwargs.get("total_assets", len(symbols))
+        total_b = kwargs.get("total_bars", 0)
+
+        done = completed + failed
+        rem = max(0, total - done)
+        now_elapsed = time.perf_counter() - overall_start
+        rate = total_b / now_elapsed if now_elapsed > 0 else 0.0
+
+        if use_rich and progress is not None and progress_task is not None:
+            progress.update(
+                progress_task,
+                completed=completed,
+                remaining=rem,
+                rate=rate,
+            )
+            if success:
+                progress.console.print(f"• {sym}: {bars} bars [{tf_str}] ({elapsed:.2f}s)")
+        else:
+            if is_verbose and success:
+                logger.debug("• %s: %d bars [%s] (%.2fs)", sym, bars, tf_str, elapsed)
+
+            if not is_quiet and total > 0:
+                current_decile = (done * 10) // total
+                if current_decile > last_decile:
+                    for d in range(last_decile + 1, min(current_decile, 10) + 1):
+                        pct = d * 10
+                        logger.info("Sync progress milestone: %d%% (%d/%d assets)", pct, done, total)
+                    last_decile = current_decile
 
     # 7. Unconditionally dispatch to batch worker pool
-    status = asyncio.run(
-        connector.sync_historical_batch(
-            symbols=symbols,
-            timeframes=target_timeframes,
-            fresh=fresh,
-            workers=workers,
-            db=db,
+    try:
+        status = asyncio.run(
+            connector.sync_historical_batch(
+                symbols=symbols,
+                timeframes=target_timeframes,
+                fresh=fresh,
+                workers=workers,
+                db=db,
+                progress_callback=progress_callback,
+            )
         )
-    )
+    finally:
+        if use_rich and progress is not None:
+            progress.stop()
+
+    if not use_rich and not is_quiet and len(symbols) > 0:
+        if last_decile < 10:
+            logger.info("Sync progress milestone: 100% (%d/%d assets)", len(symbols), len(symbols))
+            last_decile = 10
 
     # 8. Deterministic Exit Codes Contract: 0 = All OK, 1 = Fatal/All Failed, 2 = Partial Failure
     if status.failed_assets > 0 and status.completed_assets == 0:
@@ -320,25 +449,51 @@ def handle_purge_history(args: argparse.Namespace) -> int:
     db_path = getattr(args, "db_path", None)
     db = HistoricalRatesDB(db_path=db_path) if db_path else HistoricalRatesDB()
 
+    target_desc = "ALL symbols" if all_flag else (", ".join(symbols) if symbols else "None")
+    tf_desc = target_tf if target_tf else "all"
+    logger.info("Purging historical rates: db=%s, target=%s, timeframe=%s", db.db_path, target_desc, tf_desc)
+    start_t = time.perf_counter()
+
     if all_flag:
         deleted = db.clear_rates(timeframe=target_tf)
     else:
         deleted = db.clear_rates(symbols=symbols, timeframe=target_tf)
 
+    purge_duration = time.perf_counter() - start_t
+    logger.info("Purge completed in %.4fs (deleted %d records)", purge_duration, deleted)
+
     print(f"Successfully purged {deleted} historical rate record(s).")
     return 0
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[List[str]] = None, force_terminal: Optional[bool] = None) -> int:
     """CLI main entry point for Strategy Engine commands."""
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Enable verbose debug logging",
+    )
+    parent_parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Suppress informational progress logs",
+    )
+
     parser = argparse.ArgumentParser(
         prog="python -m strategy_engine.cli",
         description="Darwin Trader CLI Tools",
+        parents=[parent_parser],
     )
     subparsers = parser.add_subparsers(dest="command")
 
     sync_parser = subparsers.add_parser(
         "sync-history",
+        parents=[parent_parser],
         help="Synchronize historical OHLCV market data into local SQLite storage",
     )
     sync_parser.add_argument(
@@ -390,9 +545,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=None,
         help="Custom SQLite database file path (optional)",
     )
+    sync_parser.add_argument(
+        "--force-terminal",
+        action="store_true",
+        default=False,
+        help=argparse.SUPPRESS,
+    )
 
     purge_parser = subparsers.add_parser(
         "purge-history",
+        parents=[parent_parser],
         help="Purge historical OHLCV market data from local SQLite storage",
     )
     purge_parser.add_argument(
@@ -436,6 +598,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     committee_parser = subparsers.add_parser(
         "committee",
+        parents=[parent_parser],
         help="Deterministic technical calculation briefing for Trading Committee",
     )
     committee_parser.add_argument(
@@ -500,6 +663,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         if argv and len(argv) > 0 and argv[0] not in subparsers.choices and not argv[0].startswith("-"):
             return 1
         return exc.code if isinstance(exc.code, int) else 1
+
+    is_verbose = getattr(args, "verbose", False)
+    is_quiet = getattr(args, "quiet", False)
+    if is_verbose and is_quiet:
+        sys.stderr.write("Error: -v/--verbose and -q/--quiet are mutually exclusive.\n")
+        return 2
+
+    if is_quiet:
+        log_level = logging.WARNING
+    elif is_verbose:
+        log_level = logging.DEBUG
+    else:
+        log_level = logging.INFO
+
+    setup_cli_logging(level=log_level)
+
+    if force_terminal is not None:
+        setattr(args, "force_terminal", force_terminal)
 
     if args.command == "sync-history":
         return handle_sync_history(args)
