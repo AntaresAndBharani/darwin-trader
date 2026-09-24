@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **TUI Asset Explorer Institutional Drawer & Keyboard Binding (Issue #106, Parent #104)**:
+  - Added async method `get_asset_metrics(symbol)` to `DarwinApiClient` in `tui/api_client.py` querying `GET /api/v1/assets/{symbol}/metrics`, returning `InstitutionalMetrics` on HTTP 200, and `None` on HTTP 404 (unsynced asset) or network failure.
+  - Added collapsible `#institutional-metrics-drawer` container (fixed height 4) to `AssetExplorerModal` in `tui/screens/asset_explorer_modal.py`, styled with dedicated header and content widgets.
+  - Implemented keyboard bindings `"i"` and `"I"` to toggle the metrics drawer open/closed when the asset table is focused, with search input isolation preventing accidental toggles while typing.
+  - Implemented `self._metrics_request_symbol` race-condition token guard ensuring out-of-order or delayed responses from previous row selections are safely discarded during fast keyboard navigation.
+  - Added 150ms debounced metrics fetch on `DataTable.RowHighlighted` when the drawer is open, preventing gateway request flooding while navigating.
+  - Implemented graceful UI rendering across loading states (`Loading institutional metrics for {symbol}...`), unsynced 404 states (`No local rates synced for {symbol}. Press [H] to view/sync history.`), insufficient data states (`< 21` bars), and verified metrics with rich formatting.
+  - Updated footer help hint bar with `[I] Metrics` and added pilot acceptance tests in `tui/tests/test_tui.py` covering Gherkin Scenarios 10–11, cold-start unsynced states, insufficient data states, and search input isolation.
+
 - **Pure Calculation Engine & Fast Gateway Route for Institutional Metrics (Issue #105, Parent #104)**:
   - Implemented pure mathematical calculation engine in `strategy_engine/indicators.py` containing `compute_yang_zhang_volatility`, `compute_amihud_illiquidity`, `compute_vwap_and_bands`, and `compute_roll_spread` with automatic ascending chronological ordering (`time ASC`) normalization and zero-division / zero-$\sigma$ boundary guards.
   - Added `InstitutionalMetrics` Pydantic model in `strategy_engine/models.py` with model-level non-finite float validation sanitizing `NaN` and `Inf` to `None`.

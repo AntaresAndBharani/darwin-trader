@@ -16,6 +16,7 @@ from strategy_engine.models import (
     HistoricalRatesResponse,
     HistoricalSyncResponse,
     HistoricalSyncStatus,
+    InstitutionalMetrics,
     Position,
 )
 
@@ -334,5 +335,23 @@ class DarwinApiClient:
                 page=1,
                 total_pages=1,
             )
+
+    async def get_asset_metrics(self, symbol: str) -> Optional[InstitutionalMetrics]:
+        """
+        GET /api/v1/assets/{symbol}/metrics
+        Queries institutional microstructure and volatility metrics for an asset.
+        Returns InstitutionalMetrics model on HTTP 200 (including insufficient_data=True).
+        Returns None on HTTP 404 (unsynced asset) or network failure.
+        """
+        clean_sym = symbol.strip().upper()
+        try:
+            client = await self.get_client()
+            resp = await client.get(f"/api/v1/assets/{clean_sym}/metrics")
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            return InstitutionalMetrics(**resp.json())
+        except Exception:
+            return None
 
 
