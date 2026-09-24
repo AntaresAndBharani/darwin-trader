@@ -1,7 +1,7 @@
 """
 Configuration management for strategy parameters, Darwinex Zero limits, and MT5 setup.
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import os
 
 
@@ -13,7 +13,7 @@ class StrategyConfig(BaseModel):
     magic_number: int = 20260811
     
     # Execution Mode: True = Simulated/Mock execution, False = Live MT5 execution
-    mock_mode: bool = True
+    mock_mode: bool = Field(default_factory=lambda: os.getenv("MOCK_MODE", "true").lower() in ("true", "1", "yes"))
     
     # Strategy Indicator Parameters
     fast_ema_period: int = 12
