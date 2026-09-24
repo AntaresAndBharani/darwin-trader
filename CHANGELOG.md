@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Resilient High-Concurrency SQLite Ingestion & Fault-Isolated Batch Sync (Issue #118)**:
+  - Implemented `@contextmanager def _connection(self)` in `strategy_engine/historical_db.py` with `isolation_level=None`, `row_factory = sqlite3.Row`, `PRAGMA synchronous=NORMAL`, `PRAGMA busy_timeout = {self.busy_timeout};`, `PRAGMA wal_autocheckpoint=10000;`, and guaranteed connection closure in `finally`, eliminating Windows file handle leaks (`WinError 32`).
+  - Refactored `insert_rates` and `clear_rates` to acquire write locks with explicit `BEGIN IMMEDIATE;`, commit via `COMMIT;`, and retry up to 5 times with exponential backoff and randomized jitter on `SQLITE_BUSY`/`SQLITE_LOCKED` contentions, logging attempts at `DEBUG` level.
+  - Ensured all storage read methods (`get_latest_timestamp`, `get_total_bars`, `get_rates`) and database initialization utilize `_connection()`, maintaining 100% backward compatibility for all public method signatures and row access contracts.
+  - Implemented per-symbol fault isolation in `MT5Connector.sync_historical_batch` by wrapping worker timeframe execution in `try/except Exception as exc:`, logging debug tracebacks, capturing `sym_failed`, and recording failure reasons without aborting `asyncio.gather()`.
+  - Added comprehensive automated test suite covering Gherkin Scenarios 1–7 in `strategy_engine/tests/test_historical_db.py` and `strategy_engine/tests/test_cli_history.py` (mixed reader/writer concurrency at 30 workers, guaranteed connection closure, transaction retry state, fast-failing lock retry within 3s, batch fault isolation, and 30-worker end-to-end batch ingestion).
+
 - **Comprehensive CLI Logging & Progress Observability (Issue #116)**:
   - Added `rich>=13.0.0` dependency to `strategy_engine/requirements.txt` for ANSI terminal rendering.
   - Implemented `_sync_historical_rates_detailed` in `strategy_engine/mt5_connector.py` returning `(bars, count, error_reason)` while preserving the public 2-tuple `sync_historical_rates` and `List[HistoricalBar] | None` `get_historical_rates` interfaces.

@@ -932,3 +932,132 @@ class TestCliLoggingAndObservability:
         captured = capsys.readouterr()
         assert "Batch sync finished: 2/2 completed, 0 failed. Total bars committed: 200.\n" == captured.out
         assert "Sync progress milestone: 100%" in captured.err
+
+
+class TestBatchFaultIsolationAndConcurrency:
+    """Acceptance tests for Issue #118 Scenarios 6 and 7."""
+
+    @pytest.mark.asyncio
+    async def test_scenario_6_fault_isolated_batch_worker_task_resilience(self, temp_db, caplog):
+        """
+        Scenario 6: Fault-Isolated Batch Worker Task Resilience.
+        When a worker encounters an unrecoverable exception, worker_task catches it,
+        records fail_reason and logs at DEBUG level with exc_info=True.
+        The exception does not escape to abort asyncio.gather(), and remaining symbols succeed.
+        """
+        cfg = StrategyConfig(mock_mode=True)
+        connector = MT5Connector(cfg)
+        connector.initialize()
+
+        symbols = [f"SYM_{i}" for i in range(25)]
+        symbols.append("FAIL_SYM")
+
+        orig_detailed = connector._sync_historical_rates_detailed
+
+        def mock_sync_detailed(symbol, timeframe, fresh, db):
+            if symbol == "FAIL_SYM":
+                raise RuntimeError("Unrecoverable network transport reset")
+            return orig_detailed(symbol=symbol, timeframe=timeframe, fresh=fresh, db=db)
+
+        engine_logger = logging.getLogger("strategy_engine")
+        orig_prop = engine_logger.propagate
+        engine_logger.propagate = True
+        try:
+            with patch.object(connector, "_sync_historical_rates_detailed", side_effect=mock_sync_detailed):
+                with caplog.at_level(logging.DEBUG, logger="strategy_engine.mt5_connector"):
+                    status = await connector.sync_historical_batch(
+                        symbols=symbols,
+                        timeframe="D1",
+                        workers=25,
+                        db=temp_db,
+                        yield_ms=0,
+                    )
+
+            assert status.status == "COMPLETED"
+            assert status.total_assets == 26
+            assert status.completed_assets == 25
+            assert status.failed_assets == 1
+            assert "FAIL_SYM" in status.failed_symbols
+            # Verify DEBUG logging with exc_info
+            debug_logs = [rec.getMessage() for rec in caplog.records if rec.levelno == logging.DEBUG]
+            assert any("[FAIL_SYM] Exception during sync" in msg for msg in debug_logs)
+        finally:
+            engine_logger.propagate = orig_prop
+
+    def test_scenario_6_cli_partial_failure_exit_code_contract_on_exception(self, temp_db, capsys):
+        """
+        Scenario 6 (CLI): When a symbol raises an unrecoverable exception during sync,
+        the CLI returns exit code 2 (partial failure) with the summary table instead of crashing.
+        """
+        db_path = temp_db.db_path
+        orig_detailed = MT5Connector._sync_historical_rates_detailed
+
+        def mock_sync_detailed(self, symbol, timeframe, fresh, db):
+            if symbol == "CRASH_SYM":
+                raise RuntimeError("Simulated unhandled worker crash")
+            return orig_detailed(self, symbol=symbol, timeframe=timeframe, fresh=fresh, db=db)
+
+        with patch.object(MT5Connector, "_sync_historical_rates_detailed", mock_sync_detailed):
+            rc = cli_main([
+                "sync-history",
+                "--symbol", "AAPL,CRASH_SYM,MSFT",
+                "--workers", "20",
+                "--db-path", db_path,
+            ])
+
+        assert rc == 2
+        captured = capsys.readouterr().out
+        assert "Warning: Partial sync completed (2/3). Failed symbols: CRASH_SYM" in captured
+        assert temp_db.get_total_bars("AAPL", "D1") == 100
+        assert temp_db.get_total_bars("MSFT", "D1") == 100
+        assert temp_db.get_total_bars("CRASH_SYM", "D1") == 0
+
+    @pytest.mark.asyncio
+    async def test_scenario_7_end_to_end_batch_ingestion_pipeline_30_workers(self, temp_db):
+        """
+        Scenario 7: End-to-End Batch Ingestion Pipeline at 30 Workers.
+        Batch of 60 symbols synchronized via sync_historical_batch(workers=30)
+        with fresh=False and fresh=True. All 60 symbols complete with 0 failures,
+        exact bar counts, and zero lock errors.
+        """
+        cfg = StrategyConfig(mock_mode=True)
+        connector = MT5Connector(cfg)
+        connector.initialize()
+
+        symbols = [f"BATCH_{i:02d}" for i in range(60)]
+
+        # 1. Cold start incremental sync (fresh=False)
+        status_inc = await connector.sync_historical_batch(
+            symbols=symbols,
+            timeframe="D1",
+            workers=30,
+            fresh=False,
+            db=temp_db,
+            yield_ms=0,
+        )
+        assert status_inc.status == "COMPLETED"
+        assert status_inc.completed_assets == 60
+        assert status_inc.failed_assets == 0
+        assert status_inc.total_bars == 6000
+
+        # Verify bar counts per symbol
+        for sym in symbols:
+            assert temp_db.get_total_bars(sym, "D1") == 100
+
+        # 2. Fresh clear-then-write sync (fresh=True)
+        status_fresh = await connector.sync_historical_batch(
+            symbols=symbols,
+            timeframe="D1",
+            workers=30,
+            fresh=True,
+            db=temp_db,
+            yield_ms=0,
+        )
+        assert status_fresh.status == "COMPLETED"
+        assert status_fresh.completed_assets == 60
+        assert status_fresh.failed_assets == 0
+        assert status_fresh.total_bars == 6000
+
+        # Verify bar counts remain exact
+        for sym in symbols:
+            assert temp_db.get_total_bars(sym, "D1") == 100

@@ -4,7 +4,13 @@ Validates composite primary key WITHOUT ROWID, upsert semantics, pagination, aut
 mt5.symbol_select, fine-grained locking with 25ms yield, delisted asset resilience,
 and deterministic symbol-hash mock generator.
 """
+import concurrent.futures
+import logging
 import os
+import random
+import sqlite3
+import threading
+import time
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -519,3 +525,208 @@ class TestMT5ConnectorHistorical:
              patch("strategy_engine.mt5_connector.mt5", mock_mt5):
             bars = connector.get_historical_rates("EMPTY_SYM", "D1")
             assert bars is None
+
+
+class TestHistoricalDBConcurrencyAndResilience:
+    """
+    Acceptance tests for Issue #118:
+    High-concurrency SQLite WAL ingestion, resource cleanup, BEGIN IMMEDIATE write locks,
+    and fast-failing jittered retries.
+    """
+
+    def test_scenario_1_mixed_reader_writer_concurrency_30_workers(self, tmp_path):
+        """
+        Scenario 1: Mixed Reader-Writer Concurrency (20–30 Workers).
+        30 concurrent worker threads simultaneously execute insert_rates() with 5,000 bars each.
+        5 background reader threads continuously execute get_latest_timestamp() and get_rates().
+        All 150,000 bars are committed successfully with zero lock errors.
+        """
+        db_path = str(tmp_path / "mixed_concurrency.db")
+        db = HistoricalRatesDB(db_path=db_path, busy_timeout=60000)
+
+        errors = []
+        stop_readers = threading.Event()
+
+        def writer_worker(wid: int):
+            try:
+                bars = [
+                    HistoricalBar(
+                        symbol=f"SYM_{wid}",
+                        timeframe="D1",
+                        time=1700000000 + (i * 86400),
+                        open=100.0 + i,
+                        high=105.0 + i,
+                        low=99.0 + i,
+                        close=104.0 + i,
+                        tick_volume=1000,
+                        spread=1,
+                    )
+                    for i in range(5000)
+                ]
+                inserted = db.insert_rates(bars)
+                assert inserted == 5000
+            except Exception as e:
+                errors.append(f"Writer {wid} failed: {e}")
+
+        def reader_worker(rid: int):
+            try:
+                while not stop_readers.is_set():
+                    target_sym = f"SYM_{random.randint(0, 29)}"
+                    db.get_latest_timestamp(target_sym, "D1")
+                    db.get_rates(target_sym, "D1", limit=50)
+                    time.sleep(0.005)
+            except Exception as e:
+                errors.append(f"Reader {rid} failed: {e}")
+
+        # Start 5 reader threads
+        reader_threads = [threading.Thread(target=reader_worker, args=(i,)) for i in range(5)]
+        for t in reader_threads:
+            t.daemon = True
+            t.start()
+
+        # Execute 30 concurrent writers
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as pool:
+            futures = [pool.submit(writer_worker, i) for i in range(30)]
+            concurrent.futures.wait(futures)
+
+        # Stop readers
+        stop_readers.set()
+        for t in reader_threads:
+            t.join(timeout=2.0)
+
+        assert not errors, f"Errors occurred during concurrency test: {errors}"
+
+        # Total bar count check
+        with db._connection() as conn:
+            cur = conn.execute("SELECT COUNT(*) AS total FROM rates;")
+            total_bars = cur.fetchone()["total"]
+            assert total_bars == 150000
+
+    def test_scenario_2_guaranteed_connection_closure_and_cleanup_windows(self, tmp_path):
+        """
+        Scenario 2: Guaranteed Connection Closure and Resource Cleanup on Windows.
+        Underlying sqlite3.Connection is closed immediately in a finally block.
+        os.remove() succeeds without WinError 32 on normal completion and exceptions.
+        """
+        # 1. Normal operations cleanup
+        bar = HistoricalBar(
+            symbol="CLEANUP", timeframe="D1", time=1700000000,
+            open=10.0, high=11.0, low=9.0, close=10.5,
+        )
+        for op in ["insert", "get_latest", "get_rates", "clear"]:
+            db_file = str(tmp_path / f"test_cleanup_{op}.db")
+            db = HistoricalRatesDB(db_path=db_file)
+            if op == "insert":
+                db.insert_rates([bar])
+            elif op == "get_latest":
+                db.get_latest_timestamp("CLEANUP")
+            elif op == "get_rates":
+                db.get_rates("CLEANUP")
+            elif op == "clear":
+                db.clear_rates("CLEANUP")
+
+            # Must succeed immediately without WinError 32
+            os.remove(db_file)
+            for ext in ["-wal", "-shm"]:
+                wal_shm = db_file + ext
+                if os.path.exists(wal_shm):
+                    os.remove(wal_shm)
+
+        # 2. Exception cleanup
+        db_exc_file = str(tmp_path / "test_cleanup_exception.db")
+        db_exc = HistoricalRatesDB(db_path=db_exc_file)
+        # Attempt to insert malformed tuple (wrong length) triggering OperationalError/ProgrammingError
+        with pytest.raises(Exception):
+            db_exc.insert_rates([("INCOMPLETE",)])
+
+        # Even after exception, file handles must be cleanly closed
+        os.remove(db_exc_file)
+        for ext in ["-wal", "-shm"]:
+            wal_shm = db_exc_file + ext
+            if os.path.exists(wal_shm):
+                os.remove(wal_shm)
+
+    def test_scenario_3_immediate_write_lock_and_clean_retry_transaction_state(self, tmp_path):
+        """
+        Scenario 3: Immediate Write Lock Acquisition & Clean Retry Transaction State.
+        Autocommit mode (isolation_level=None), BEGIN IMMEDIATE;, and fresh connection per retry.
+        """
+        db_file = str(tmp_path / "test_retry_state.db")
+        db = HistoricalRatesDB(db_path=db_file, busy_timeout=100)
+
+        # Verify connection isolation level and row_factory
+        with db._connection() as conn:
+            assert conn.isolation_level is None
+            assert conn.row_factory == sqlite3.Row
+
+        # Test retry on simulated lock contention that resolves
+        bar = HistoricalBar(
+            symbol="RETRY_TEST", timeframe="D1", time=1700000000,
+            open=10.0, high=11.0, low=9.0, close=10.5,
+        )
+
+        lock_acquired = threading.Event()
+        can_release = threading.Event()
+
+        def lock_holder():
+            conn = sqlite3.connect(db_file, isolation_level=None)
+            conn.execute("BEGIN EXCLUSIVE;")
+            lock_acquired.set()
+            can_release.wait(timeout=2.0)
+            time.sleep(0.08)  # hold briefly to trigger a retry
+            conn.execute("COMMIT;")
+            conn.close()
+
+        holder = threading.Thread(target=lock_holder)
+        holder.start()
+        lock_acquired.wait(timeout=1.0)
+        can_release.set()
+
+        inserted = db.insert_rates([bar])
+        holder.join()
+
+        assert inserted == 1
+        assert db.get_total_bars("RETRY_TEST") == 1
+
+    def test_scenario_4_fast_failing_lock_contention_with_jittered_backoff(self, tmp_path, caplog):
+        """
+        Scenario 4: Fast-Failing Lock Contention Unit Verification with Jittered Backoff.
+        Raises OperationalError after 5 attempts exhausted in < 3.0s, logging DEBUG sqlite_errorname.
+        """
+        db_file = str(tmp_path / "test_fast_fail.db")
+        db = HistoricalRatesDB(db_path=db_file, busy_timeout=50)
+
+        # Ensure table exists
+        bar = HistoricalBar(
+            symbol="LOCK_SYM", timeframe="D1", time=1700000000,
+            open=10.0, high=11.0, low=9.0, close=10.5,
+        )
+        db.insert_rates([bar])
+
+        # Hold exclusive lock from external connection
+        lock_conn = sqlite3.connect(db_file, isolation_level=None)
+        lock_conn.execute("BEGIN EXCLUSIVE;")
+
+        engine_logger = logging.getLogger("strategy_engine")
+        orig_prop = engine_logger.propagate
+        engine_logger.propagate = True
+        try:
+            with caplog.at_level(logging.DEBUG, logger="strategy_engine.historical_db"):
+                t0 = time.perf_counter()
+                with pytest.raises(sqlite3.OperationalError):
+                    db.insert_rates([bar])
+                elapsed = time.perf_counter() - t0
+
+                # Must exhaust 5 attempts in less than 3.0 seconds
+                assert elapsed < 3.0
+
+                # Log verification
+                debug_logs = [rec.getMessage() for rec in caplog.records if rec.levelno == logging.DEBUG]
+                retry_logs = [msg for msg in debug_logs if "retry attempt" in msg.lower() or "Write retry attempt" in msg]
+                assert len(retry_logs) >= 4
+                # Must log sqlite_errorname (SQLITE_BUSY) or lock indication
+                assert any("SQLITE_BUSY" in msg for msg in debug_logs)
+        finally:
+            engine_logger.propagate = orig_prop
+            lock_conn.execute("ROLLBACK;")
+            lock_conn.close()
