@@ -12,11 +12,18 @@ from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
 from strategy_engine.historical_db import HistoricalRatesDB
+from strategy_engine.indicators import (
+    compute_amihud_illiquidity,
+    compute_roll_spread_metrics,
+    compute_vwap_and_bands,
+    compute_yang_zhang_volatility,
+)
 from strategy_engine.models import (
     AssetInfo,
     HistoricalRatesResponse,
     HistoricalSyncResponse,
     HistoricalSyncStatus,
+    InstitutionalMetrics,
     TIMEFRAME_TO_MT5,
 )
 from .routes_strategy import connector, _state_lock
@@ -239,7 +246,81 @@ def get_historical_rates_endpoint(
     )
 
 
-# 4. GET /{symbol} (single asset spec)
+# 4. GET /{symbol}/metrics (preceding dynamic /{symbol})
+@router.get("/{symbol}/metrics", response_model=InstitutionalMetrics)
+def get_asset_metrics_endpoint(
+    symbol: str,
+    timeframe: str = Query("D1", description="Historical bar timeframe (e.g. D1)"),
+) -> InstitutionalMetrics:
+    """
+    Retrieve institutional-grade microstructure and volatility metrics for an asset.
+    Reads strictly from local SQLite storage (HistoricalRatesDB) with zero broker/MT5 calls.
+    Queries the latest 21 bars (descending=True) and normalizes to chronological time ASC.
+    """
+    clean_tf = timeframe.strip().upper()
+    if clean_tf not in TIMEFRAME_TO_MT5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported timeframe '{timeframe}'. Supported timeframes: {', '.join(TIMEFRAME_TO_MT5.keys())}",
+        )
+
+    clean_sym = symbol.strip().upper()
+    db = HistoricalRatesDB()
+
+    # Query latest 21 bars descending (most recent first)
+    bars_desc, total_bars = db.get_rates(
+        symbol=clean_sym,
+        timeframe=clean_tf,
+        limit=21,
+        offset=0,
+        descending=True,
+    )
+
+    # Scenario 8: 404 if no historical bars in local SQLite
+    if total_bars == 0 or not bars_desc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No local historical rates found; synchronize history first",
+        )
+
+    # Scenario 9: 200 with insufficient_data=True if fewer than 21 bars
+    if total_bars < 21 or len(bars_desc) < 21:
+        return InstitutionalMetrics(
+            symbol=clean_sym,
+            insufficient_data=True,
+            bars_found=total_bars,
+            bars_required=21,
+            last_bar_time=bars_desc[0].time if bars_desc else None,
+        )
+
+    # Scenario 7: Synced asset - reverse newest bars to chronological ASC order
+    bars_asc = bars_desc[::-1]
+    last_bar_time = bars_desc[0].time
+
+    # Compute metrics in-memory
+    yz_vol = compute_yang_zhang_volatility(bars_asc, window=20)
+    amihud = compute_amihud_illiquidity(bars_asc, window=20)
+    vwap_data = compute_vwap_and_bands(bars_asc, window=20, num_std=2.0)
+    roll_pct, roll_abs = compute_roll_spread_metrics(bars_asc, window=20)
+
+    return InstitutionalMetrics(
+        symbol=clean_sym,
+        insufficient_data=False,
+        bars_found=total_bars,
+        bars_required=21,
+        yang_zhang_vol_annualized=yz_vol,
+        amihud_sensitivity=amihud,
+        vwap=vwap_data.get("vwap"),
+        vwap_upper=vwap_data.get("vwap_upper"),
+        vwap_lower=vwap_data.get("vwap_lower"),
+        vwap_deviation_sigmas=vwap_data.get("vwap_deviation_sigmas"),
+        roll_spread_pct=roll_pct,
+        roll_spread_absolute=roll_abs,
+        last_bar_time=last_bar_time,
+    )
+
+
+# 5. GET /{symbol} (single asset spec)
 @router.get("/{symbol}", response_model=AssetInfo)
 def get_asset_by_symbol(symbol: str) -> AssetInfo:
     """
