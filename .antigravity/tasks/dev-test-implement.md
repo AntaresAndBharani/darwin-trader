@@ -5,7 +5,7 @@ Design: ws-setups/graph-engineering/docs/dev-test-node.md
 Migrated (2026-08-26) from Step 5 of the merged `three-amigos-and-dev-test.md`
 Antigravity task to a local Fetch -> Act pipeline
 (`scripts/local-pipeline/run-three-amigos-and-dev-test.ps1`). Genuine multi-turn
-agentic work (reading the codebase, writing code, running Gradle/pytest/Maestro,
+agentic work (reading the codebase, writing code, running pytest,
 iterating) that can't be reduced to a single structured judgment call. The
 wrapper has already marked the parent story `status:in-development` and created
 your branch before invoking you.
@@ -37,13 +37,11 @@ Body:
 1. Implement the change described in the subtask's task description, entry
    points, and acceptance criteria above -- grounded in the parent story's
    overall intent. Follow Darwin Trader conventions:
-   - **Android**: Kotlin, Jetpack Compose, Material 3, MVVM / UDF, StateFlow, Retrofit.
-   - **Backend**: Python 3.10+, FastAPI, MT5 strategy backtester and risk manager.
+   - **Terminal UI**: Python 3.11+, Textual, reactive widgets, async API client.
+   - **Backend**: Python 3.11+, FastAPI, MT5 strategy backtester and risk manager.
    - Never weaken or delete an existing test assertion to force a pass.
 2. Run test suites:
-   - Android Unit Tests: `cd android; .\gradlew.bat testSnapshotDebugUnitTest --no-daemon; cd ..`
-   - Python Backend Tests: `python -m pytest api_gateway/tests strategy_engine/tests`
-   - Delta E2E Tests (if UI modified): `.\scripts\run-e2e-tests.ps1 -Delta`
+   - Python Test Suite: `python -m pytest api_gateway/tests strategy_engine/tests tui/tests`
    - If tests fail, fix and re-run, up to 3 attempts total.
 3. **If tests pass:** commit, push the branch
    (`& C:\Users\rogal\workspaces\Set-GhToken-Antares.ps1; git push origin {{BRANCH_NAME}}`),
@@ -51,7 +49,7 @@ Body:
    any "[Subtask]: " prefix), with a body containing what changed, test results,
    link to parent story #{{STORY_NUMBER}}, and "Closes #{{SUBTASK_NUMBER}}".
    Remove `status:awaiting-approval` and add `status:in-progress` on subtask
-   #{{SUBTASK_NUMBER}}. Publish sticky E2E evidence if applicable (`.\scripts\post-e2e-evidence.ps1`).
+   #{{SUBTASK_NUMBER}}.
 4. **If still failing after 3 attempts, or you hit a decision only the PO can make:**
    do not open a PR. Remove `status:awaiting-approval`, add `status:needs-po-input`,
    and comment on subtask #{{SUBTASK_NUMBER}} explaining what's blocking it.

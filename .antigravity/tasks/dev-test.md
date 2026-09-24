@@ -1,7 +1,7 @@
 # Dev & Test — Antigravity scheduled task instructions (Darwin Trader)
 
 Design: ws-setups/graph-engineering/docs/antigravity-scheduled-tasks.md
-(alternate executor for docs/dev-test-node.md and docs/e2e-testing-recommendations.md).
+(alternate executor for docs/dev-test-node.md).
 
 First run `git checkout main && git fetch origin && git reset --hard origin/main` so this checkout is current, before anything below.
 
@@ -13,7 +13,7 @@ For each story: find its subtasks via `gh api repos/<repo>/issues/<story>/sub_is
 
 1. Check out the PR's existing branch (not `main`).
 2. `git fetch origin && git rebase origin/main`.
-3. **Clean rebase:** re-run unit tests (Android: `cd android; .\gradlew.bat testSnapshotDebugUnitTest --no-daemon; cd ..` + Python: `pytest api_gateway/tests strategy_engine/tests`). If tests pass: `git fetch origin` again, read the confirmed current remote SHA for this branch, then push with a SHA-qualified lease — `git push --force-with-lease="<branch>:<sha>"`, **not** a bare `--force-with-lease`.
+3. **Clean rebase:** re-run unit tests (`pytest api_gateway/tests strategy_engine/tests tui/tests`). If tests pass: `git fetch origin` again, read the confirmed current remote SHA for this branch, then push with a SHA-qualified lease — `git push --force-with-lease="<branch>:<sha>"`, **not** a bare `--force-with-lease`.
 4. **Conflicting rebase:** only resolve a hunk when it's unambiguously additive on both sides (e.g. concurrent `CHANGELOG.md` additions under `## [Unreleased]`). For real code conflicts, abort rebase and add `status:needs-po-input` to the subtask.
 
 ## Step 2 — fix-up work takes priority over new implementation
@@ -23,8 +23,8 @@ Only reached if Step 1 found no approved-and-conflicting PR anywhere.
 For each story: find its subtasks via `gh api repos/<repo>/issues/<story>/sub_issues`, and among those, any with an open PR labeled `review:changes-requested`. If one exists anywhere, handle it and stop:
 
 1. Read the parent story for context, check out the PR's existing branch (not `main`), and read the blocking issues from the PR's most recent comment starting with `<!-- pr-review-verdict -->`.
-2. Address every blocking item across Android and Backend. Never weaken or delete an existing test assertion to force a pass.
-3. Re-run unit tests and targeted delta E2E tests (`.\scripts\run-e2e-tests.ps1 -Delta`), up to 3 attempts.
+2. Address every blocking item across Terminal UI and Backend. Never weaken or delete an existing test assertion to force a pass.
+3. Re-run unit and integration tests (`pytest api_gateway/tests strategy_engine/tests tui/tests`), up to 3 attempts.
 4. If tests pass: commit, push to the same branch, comment on the PR summarizing changes, and remove the `review:changes-requested` label.
 5. If still failing after 3 attempts, comment on the PR explaining what's blocking it and request PO input.
 
@@ -48,8 +48,7 @@ For each matching story:
 4. For each such subtask:
    a. Create branch `feat/issue-<N>` from the latest `main`.
    b. Implement the change described in the subtask.
-   c. Run unit tests (`cd android; .\gradlew.bat testSnapshotDebugUnitTest --no-daemon; cd ..` + `pytest api_gateway/tests strategy_engine/tests`).
-   d. If modifying UI or user journeys, execute delta E2E tests (`.\scripts\run-e2e-tests.ps1 -Delta`) and capture visual artifacts.
-   e. If tests pass: commit, push branch, open PR titled after the subtask, with test summaries, link back to parent story, and "Closes #<N>". Remove `status:awaiting-approval` and add `status:in-progress` on the subtask. Publish sticky PR evidence (`.\scripts\post-e2e-evidence.ps1`).
-   f. If failing after 3 attempts: do not open PR. Relabel `status:needs-po-input` and comment with details.
+   c. Run unit and integration tests (`pytest api_gateway/tests strategy_engine/tests tui/tests`).
+   d. If tests pass: commit, push branch, open PR titled after the subtask, with test summaries, link back to parent story, and "Closes #<N>". Remove `status:awaiting-approval` and add `status:in-progress` on the subtask.
+   e. If failing after 3 attempts: do not open PR. Relabel `status:needs-po-input` and comment with details.
 5. Once every subtask in step 2 has been attempted, remove `status:in-development` from the STORY.

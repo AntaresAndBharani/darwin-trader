@@ -20,8 +20,8 @@ You are triaging the open GitHub issues labeled `{{LABEL}}` in the
 ```
 
 Cluster these issues by theme — shared file/script, shared root cause, or
-shared category of concern across Android (`android/app/`), API Gateway
-(`api_gateway/`), Strategy Engine (`strategy_engine/`), or E2E tests (`e2e/`).
+shared category of concern across Terminal UI (`tui/`), API Gateway
+(`api_gateway/`), or Strategy Engine (`strategy_engine/`).
 Use both title and body; two issues can share a theme without sharing wording.
 Only group issues into the same cluster when they genuinely belong together —
 never force a weak grouping just to avoid a small cluster.
@@ -47,7 +47,7 @@ For each cluster you form, synthesize one new "user story" issue:
   `{{LABEL}}` is `tech-debt`, say this is engineering hygiene filed by PR Review
   as a non-blocking follow-up; if `{{LABEL}}` is `enhancement`, say this is a
   genuine improvement PR Review flagged as worth doing); Success metrics
-  (concrete and honest, e.g. "N issues resolved, unit and E2E test suites green");
+  (concrete and honest, e.g. "N issues resolved, unit and integration test suites green");
   Acceptance criteria (pulled from each source issue's concrete, testable
   content); Feasibility and dependencies; Story size; Target milestone ("next
   available capacity — this is backlog cleanup, not date-driven"); Out of

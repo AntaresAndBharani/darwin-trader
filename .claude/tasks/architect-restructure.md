@@ -38,9 +38,9 @@ Comments (JSON array, chronological):
 ## What to do
 
 1. Read Three Amigos' feedback in the most recent comment above.
-2. Use Read/Grep/Glob to inspect the actual repository code across Android
-   (`android/app/src/main/`) and Backend (`api_gateway/`, `strategy_engine/`)
-   to resolve the structural issues identified by Three Amigos.
+2. Use Read/Grep/Glob to inspect the actual repository code across Terminal
+   UI (`tui/`), API Gateway (`api_gateway/`), and Strategy Engine
+   (`strategy_engine/`) to resolve the structural issues identified by Three Amigos.
 3. If Three Amigos raised a conflict only the PO can decide, set `outcome` to
    `PO_ESCALATION` with a clear explanation.
 4. Otherwise, determine which subtasks to create, update, or close so the
