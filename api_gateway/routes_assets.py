@@ -11,15 +11,18 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
+from strategy_engine.committee_calculator import compute_benchmark_beta
 from strategy_engine.historical_db import HistoricalRatesDB
 from strategy_engine.indicators import (
     compute_amihud_illiquidity,
+    compute_kalman_dynamic_beta,
     compute_roll_spread_metrics,
     compute_vwap_and_bands,
     compute_yang_zhang_volatility,
 )
 from strategy_engine.models import (
     AssetInfo,
+    AssetMetricsResponse as BaseAssetMetricsResponse,
     HistoricalRatesResponse,
     HistoricalSyncResponse,
     HistoricalSyncStatus,
@@ -246,16 +249,25 @@ def get_historical_rates_endpoint(
     )
 
 
+class AssetMetricsResponse(InstitutionalMetrics, BaseAssetMetricsResponse):
+    """
+    Consolidated response model combining institutional microstructure metrics
+    and dynamic systematic risk (Kalman Dynamic Beta and OLS Beta).
+    """
+    pass
+
+
 # 4. GET /{symbol}/metrics (preceding dynamic /{symbol})
-@router.get("/{symbol}/metrics", response_model=InstitutionalMetrics)
+@router.get("/{symbol}/metrics", response_model=AssetMetricsResponse)
 def get_asset_metrics_endpoint(
     symbol: str,
     timeframe: str = Query("D1", description="Historical bar timeframe (e.g. D1)"),
-) -> InstitutionalMetrics:
+) -> AssetMetricsResponse:
     """
-    Retrieve institutional-grade microstructure and volatility metrics for an asset.
+    Retrieve institutional-grade microstructure and volatility metrics for an asset,
+    including Kalman dynamic beta and systematic risk metrics against SPY benchmark.
     Reads strictly from local SQLite storage (HistoricalRatesDB) with zero broker/MT5 calls.
-    Queries the latest 21 bars (descending=True) and normalizes to chronological time ASC.
+    Queries the latest up to 250 bars (descending=True) and normalizes to chronological time ASC.
     """
     clean_tf = timeframe.strip().upper()
     if clean_tf not in TIMEFRAME_TO_MT5:
@@ -267,11 +279,11 @@ def get_asset_metrics_endpoint(
     clean_sym = symbol.strip().upper()
     db = HistoricalRatesDB()
 
-    # Query latest 21 bars descending (most recent first)
+    # Query latest bars descending (most recent first) up to 250 bars
     bars_desc, total_bars = db.get_rates(
         symbol=clean_sym,
         timeframe=clean_tf,
-        limit=21,
+        limit=250,
         offset=0,
         descending=True,
     )
@@ -285,7 +297,7 @@ def get_asset_metrics_endpoint(
 
     # Scenario 9: 200 with insufficient_data=True if fewer than 21 bars
     if total_bars < 21 or len(bars_desc) < 21:
-        return InstitutionalMetrics(
+        return AssetMetricsResponse(
             symbol=clean_sym,
             insufficient_data=True,
             bars_found=total_bars,
@@ -293,17 +305,38 @@ def get_asset_metrics_endpoint(
             last_bar_time=bars_desc[0].time if bars_desc else None,
         )
 
-    # Scenario 7: Synced asset - reverse newest bars to chronological ASC order
+    # Synced asset - reverse newest bars to chronological ASC order
     bars_asc = bars_desc[::-1]
     last_bar_time = bars_desc[0].time
 
-    # Compute metrics in-memory
+    # Compute microstructure metrics in-memory (Tier 1)
     yz_vol = compute_yang_zhang_volatility(bars_asc, window=20)
     amihud = compute_amihud_illiquidity(bars_asc, window=20)
     vwap_data = compute_vwap_and_bands(bars_asc, window=20, num_std=2.0)
     roll_pct, roll_abs = compute_roll_spread_metrics(bars_asc, window=20)
 
-    return InstitutionalMetrics(
+    # Single benchmark fetch (SPY) for beta & systematic risk
+    spy_desc, spy_total = db.get_rates("SPY", timeframe=clean_tf, limit=250, offset=0, descending=True)
+    spy_bars = spy_desc[::-1] if (spy_total > 0 and spy_desc) else []
+
+    ols_beta, rel_strength, bench_flags = compute_benchmark_beta(
+        db, clean_sym, bars_asc, benchmark_symbol="SPY", benchmark_bars=spy_bars
+    )
+    kalman_res = compute_kalman_dynamic_beta(bars_asc, spy_bars)
+
+    asset_times = {b.time for b in bars_asc}
+    spy_times = {b.time for b in spy_bars}
+    common_overlap = len(asset_times & spy_times)
+
+    # Telemetry flag deduplication
+    data_flags: List[str] = []
+    seen = set()
+    for f in bench_flags + kalman_res.data_flags:
+        if f not in seen:
+            seen.add(f)
+            data_flags.append(f)
+
+    return AssetMetricsResponse(
         symbol=clean_sym,
         insufficient_data=False,
         bars_found=total_bars,
@@ -317,6 +350,14 @@ def get_asset_metrics_endpoint(
         roll_spread_pct=roll_pct,
         roll_spread_absolute=roll_abs,
         last_bar_time=last_bar_time,
+        ols_beta=ols_beta,
+        relative_strength=rel_strength,
+        kalman_beta=round(float(kalman_res.current_beta), 4) if kalman_res.current_beta is not None else None,
+        kalman_alpha=round(float(kalman_res.current_alpha), 4) if kalman_res.current_alpha is not None else None,
+        kalman_trend=kalman_res.kalman_trend,
+        common_overlap_bars=common_overlap,
+        beta_trajectory=kalman_res.beta_trajectory,
+        data_flags=data_flags,
     )
 
 

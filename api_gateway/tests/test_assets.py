@@ -15,6 +15,7 @@ from strategy_engine.cli import main as cli_main
 from strategy_engine.historical_db import HistoricalRatesDB
 from strategy_engine.models import (
     AssetInfo,
+    AssetMetricsResponse,
     HistoricalBar,
     HistoricalRatesResponse,
     HistoricalSyncResponse,
@@ -934,5 +935,131 @@ def test_gateway_endpoint_invalid_timeframe():
     resp = client.get("/api/v1/assets/EURUSD/metrics?timeframe=INVALID_TF")
     assert resp.status_code == 400
     assert "Unsupported timeframe" in resp.json()["detail"]
+
+
+def test_scenario_8_fast_gateway_route_contract_and_precedence():
+    """
+    Scenario 8: Fast Gateway Route Contract and Precedence.
+    Given historical bars exist for "AAPL" and "SPY" in SQLite
+    When a client requests "GET /api/v1/assets/AAPL/metrics"
+    Then status code is 200 OK
+    And the payload contains "symbol", "ols_beta", "kalman_beta", "kalman_alpha", "kalman_trend", and "data_flags".
+    """
+    db = HistoricalRatesDB()
+    db.clear_rates(symbol="AAPL")
+    db.clear_rates(symbol="SPY")
+
+    base_time = 1700000000
+    bars_spy = [
+        HistoricalBar(
+            symbol="SPY",
+            timeframe="D1",
+            time=base_time + i * 86400,
+            open=400.0 + i * 0.2,
+            high=402.0 + i * 0.2,
+            low=398.0 + i * 0.2,
+            close=401.0 + i * 0.2 + ((i % 3) * 0.5),
+            tick_volume=2000,
+            spread=1,
+        )
+        for i in range(50)
+    ]
+    bars_aapl = [
+        HistoricalBar(
+            symbol="AAPL",
+            timeframe="D1",
+            time=base_time + i * 86400,
+            open=150.0 + i * 0.3,
+            high=152.0 + i * 0.3,
+            low=149.0 + i * 0.3,
+            close=151.0 + i * 0.3 + ((i % 3) * 0.8),
+            tick_volume=3000,
+            spread=1,
+        )
+        for i in range(50)
+    ]
+    db.insert_rates(bars_spy)
+    db.insert_rates(bars_aapl)
+
+    resp = client.get("/api/v1/assets/AAPL/metrics")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # Route contract assertions
+    for field in ("symbol", "ols_beta", "kalman_beta", "kalman_alpha", "kalman_trend", "data_flags"):
+        assert field in data, f"Field '{field}' missing in payload"
+
+    assert data["symbol"] == "AAPL"
+    assert data["ols_beta"] is not None
+    assert isinstance(data["ols_beta"], float)
+    assert data["kalman_beta"] is not None
+    assert isinstance(data["kalman_beta"], float)
+    assert data["kalman_alpha"] is not None
+    assert isinstance(data["kalman_alpha"], float)
+    assert data["kalman_trend"] in ("EXPANDING", "CONTRACTING", "STABLE")
+    assert isinstance(data["data_flags"], list)
+    assert data["common_overlap_bars"] == 50
+    assert len(data["beta_trajectory"]) > 0
+
+    # Ensure model validation works
+    parsed_model = AssetMetricsResponse(**data)
+    assert parsed_model.symbol == "AAPL"
+    assert parsed_model.kalman_beta == data["kalman_beta"]
+
+    # Precedence assertion: ensure /AAPL/metrics did not return AssetInfo (which has lot_min)
+    assert "lot_min" not in data
+
+    # Cleanup
+    db.clear_rates(symbol="AAPL")
+    db.clear_rates(symbol="SPY")
+
+
+def test_scenario_3_gateway_metrics_uncached_benchmark_zero_network_calls():
+    """
+    Scenario 3: Graceful Invariant on Uncached Benchmark (Zero Network Calls).
+    Given an asset symbol "NVDA" with 250 bars in SQLite storage and an uncached benchmark "SPY" (0 bars)
+    When compute_kalman_dynamic_beta is called via the gateway route GET /api/v1/assets/NVDA/metrics
+    Then it returns kalman_beta = None
+    And appends the data flag "[BENCHMARK: UNCACHED (STANDALONE REGIME)]"
+    And does not perform any blocking MT5 network requests.
+    """
+    db = HistoricalRatesDB()
+    db.clear_rates(symbol="NVDA")
+    db.clear_rates(symbol="SPY")
+
+    base_time = 1700000000
+    bars_nvda = [
+        HistoricalBar(
+            symbol="NVDA",
+            timeframe="D1",
+            time=base_time + i * 86400,
+            open=100.0 + i * 0.1,
+            high=102.0 + i * 0.1,
+            low=99.0 + i * 0.1,
+            close=101.0 + i * 0.1,
+            tick_volume=1000,
+            spread=1,
+        )
+        for i in range(250)
+    ]
+    db.insert_rates(bars_nvda)
+
+    with patch.object(connector, "get_asset_info") as mock_asset_info, patch.object(
+        connector, "sync_historical_rates"
+    ) as mock_sync:
+        resp = client.get("/api/v1/assets/NVDA/metrics")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        assert data["symbol"] == "NVDA"
+        assert data["kalman_beta"] is None
+        assert data["ols_beta"] is None
+        assert "[BENCHMARK: UNCACHED (STANDALONE REGIME)]" in data["data_flags"]
+        assert data["data_flags"].count("[BENCHMARK: UNCACHED (STANDALONE REGIME)]") == 1
+        assert mock_asset_info.call_count == 0
+        assert mock_sync.call_count == 0
+
+    db.clear_rates(symbol="NVDA")
+
 
 
