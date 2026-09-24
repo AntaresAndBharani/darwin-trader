@@ -44,7 +44,7 @@ async def test_scenario_7_metrics_drawer_state_sync_and_stale_discard(mock_clien
         return None
 
     mock_client.get_asset_metrics.side_effect = fake_get_metrics
-    modal = AssetExplorerModal(api_client=mock_client, debounce_delay=0.15)
+    modal = AssetExplorerModal(api_client=mock_client, debounce_delay=0.3)
     app = DarwinTraderApp(api_client=mock_client)
 
     async with app.run_test(size=(120, 40)) as pilot:
@@ -73,17 +73,17 @@ async def test_scenario_7_metrics_drawer_state_sync_and_stale_discard(mock_clien
         assert "Loading metrics for AAPL..." in str(content.content)
         assert modal._metrics_request_symbol == "AAPL"
 
-        # And: HTTP API call to get_asset_metrics is debounced by 150ms
+        # And: HTTP API call to get_asset_metrics is debounced by 300ms
         await pilot.pause(0.05)
         assert not any(c.args and c.args[0] == "AAPL" for c in mock_client.get_asset_metrics.call_args_list)
 
-        # Debounce timer fires after 150ms
-        await pilot.pause(0.15)
+        # Debounce timer fires after 300ms
+        await pilot.pause(0.35)
         assert any(c.args and c.args[0] == "AAPL" for c in mock_client.get_asset_metrics.call_args_list)
 
         # And: when metrics API response for AAPL resolves
         aapl_event.set()
-        await pilot.pause(0.05)
+        await pilot.pause(0.1)
         assert modal._current_metrics.symbol == "AAPL"
         assert "AAPL" in str(header.content)
         assert "Dynamic Kalman Beta" in str(content.content) and "1.2500" in str(content.content)
@@ -91,7 +91,7 @@ async def test_scenario_7_metrics_drawer_state_sync_and_stale_discard(mock_clien
 
         # And: if delayed response for NVDA arrives afterward, it is discarded without overwriting AAPL
         await modal._fetch_metrics("NVDA")
-        await pilot.pause(0.05)
+        await pilot.pause(0.1)
         assert modal._current_metrics.symbol == "AAPL"
         assert "AAPL" in str(header.content)
         assert "1.2500" in str(content.content)
