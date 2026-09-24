@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Core Mathematical State-Space Engine & Input Sanitization (Issue #109, Parent #108)**:
+  - Implemented `compute_kalman_dynamic_beta` in `strategy_engine/indicators.py` with fast float Joseph-stabilized covariance recursion ($[\alpha_t, \beta_t]^T$) for zero-lag adaptive systematic risk tracking without matrix inversion overhead.
+  - Added symmetric price input validation ($P_t > 0$ and `math.isfinite`) returning `[DATA_CORRUPT: NON_POSITIVE_PRICES]`, uncached benchmark detection emitting `[BENCHMARK: UNCACHED (STANDALONE REGIME)]`, and $<20$ common timestamp overlap guard emitting `[BENCHMARK: INSUFFICIENT_OVERLAP]`.
+  - Added 20-bar beta displacement trend classification (`kalman_trend`: `EXPANDING`, `CONTRACTING`, `STABLE`) guarded by $N \ge 21$.
+  - Added `KalmanBetaResult` and `AssetMetricsResponse` data models in `strategy_engine/models.py`, and enriched `CommitteeContext` with lean `kalman_beta`, `kalman_alpha`, and `kalman_trend` scalar fields.
+  - Added unit and BDD acceptance test suite in `strategy_engine/tests/test_kalman_beta.py` covering Scenarios 1 (deterministic convergence), 2 (regime adaptation on jump), 3 (uncached benchmark), 4 (insufficient overlap), 5 (symmetrical corrupt/non-positive price guard), 6 (flat benchmark), and `kalman_trend` state transitions.
+
 - **TUI Asset Explorer Institutional Drawer & Keyboard Binding (Issue #106, Parent #104)**:
   - Added async method `get_asset_metrics(symbol)` to `DarwinApiClient` in `tui/api_client.py` querying `GET /api/v1/assets/{symbol}/metrics`, returning `InstitutionalMetrics` on HTTP 200, and `None` on HTTP 404 (unsynced asset) or network failure.
   - Added collapsible `#institutional-metrics-drawer` container (fixed height 4) to `AssetExplorerModal` in `tui/screens/asset_explorer_modal.py`, styled with dedicated header and content widgets.
