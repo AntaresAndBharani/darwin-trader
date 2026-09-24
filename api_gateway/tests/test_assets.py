@@ -19,6 +19,7 @@ from strategy_engine.models import (
     HistoricalRatesResponse,
     HistoricalSyncResponse,
     HistoricalSyncStatus,
+    InstitutionalMetrics,
 )
 from strategy_engine.mt5_connector import MT5Connector
 from tui.api_client import DarwinApiClient
@@ -714,5 +715,224 @@ async def test_client_sdk_error_handling_and_status_codes():
         rates_resp = await sdk.get_historical_rates("MSFT", timeframe="INVALID_TF")
         assert rates_resp.bars == []
         assert rates_resp.total_bars == 0
+
+
+def test_scenario_7_fast_gateway_endpoint_for_synced_asset():
+    """
+    Scenario 7: Fast Gateway Endpoint for Synced Asset Using Most Recent Bars.
+    Given an asset symbol "EURUSD" with 100 historical D1 bars in the local SQLite rates database
+    When an API client queries "GET /api/v1/assets/EURUSD/metrics"
+    Then the gateway queries HistoricalRatesDB with descending=True and limit=21
+    And reverses the bars to chronological time ASC order ending at the latest available timestamp
+    And responds with HTTP 200 OK and payload with insufficient_data=False.
+    """
+    db = HistoricalRatesDB()
+    db.clear_rates(symbol="EURUSD")
+
+    base_time = 1700000000
+    # First 79 bars: flat at 1.0500
+    # Last 21 bars: oscillating with known price variance
+    test_bars = []
+    for i in range(79):
+        test_bars.append(
+            HistoricalBar(
+                symbol="EURUSD",
+                timeframe="D1",
+                time=base_time + i * 86400,
+                open=1.0500,
+                high=1.0500,
+                low=1.0500,
+                close=1.0500,
+                tick_volume=1000,
+                spread=1,
+            )
+        )
+    for i in range(79, 100):
+        price = 1.0500 + ((i % 2) * 0.0050)
+        test_bars.append(
+            HistoricalBar(
+                symbol="EURUSD",
+                timeframe="D1",
+                time=base_time + i * 86400,
+                open=price,
+                high=price + 0.0020,
+                low=price - 0.0020,
+                close=price,
+                tick_volume=1500,
+                spread=1,
+            )
+        )
+    db.insert_rates(test_bars)
+
+    resp = client.get("/api/v1/assets/EURUSD/metrics")
+    assert resp.status_code == 200
+    data = resp.json()
+    metrics_obj = InstitutionalMetrics(**data)
+    assert metrics_obj.symbol == "EURUSD"
+
+    assert data["symbol"] == "EURUSD"
+    assert data["insufficient_data"] is False
+    assert data["bars_found"] == 100
+    assert data["bars_required"] == 21
+    assert data["last_bar_time"] == db.get_latest_timestamp("EURUSD", "D1")
+
+    # Metrics computed on newest 21 bars with price variance must be non-zero
+    assert data["yang_zhang_vol_annualized"] is not None
+    assert data["yang_zhang_vol_annualized"] > 0.0
+    assert data["amihud_sensitivity"] is not None
+    assert data["amihud_sensitivity"] > 0.0
+    assert data["vwap"] is not None
+    assert data["vwap_upper"] is not None
+    assert data["vwap_lower"] is not None
+    assert data["vwap_deviation_sigmas"] is not None
+    assert data["roll_spread_pct"] is not None
+    assert data["roll_spread_absolute"] is not None
+
+
+def test_scenario_8_gateway_endpoint_returns_404_for_unsynced_asset():
+    """
+    Scenario 8: Gateway Endpoint Returns 404 for Unsynced Asset.
+    Given an asset symbol "UNKNOWN_SYM" with zero bars in the local SQLite rates database
+    When an API client queries "GET /api/v1/assets/UNKNOWN_SYM/metrics"
+    Then the gateway responds with HTTP 404 Not Found
+    And the detail message indicates "No local historical rates found; synchronize history first"
+    And no MT5 network calls are triggered.
+    """
+    db = HistoricalRatesDB()
+    db.clear_rates(symbol="UNKNOWN_SYM")
+
+    with patch.object(connector, "get_asset_info") as mock_asset_info, patch.object(
+        connector, "sync_historical_rates"
+    ) as mock_sync:
+        resp = client.get("/api/v1/assets/UNKNOWN_SYM/metrics")
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "No local historical rates found; synchronize history first"
+        assert mock_asset_info.call_count == 0
+        assert mock_sync.call_count == 0
+
+
+def test_scenario_9_gateway_endpoint_handles_insufficient_historical_bars():
+    """
+    Scenario 9: Gateway Endpoint Handles Insufficient Historical Bars.
+    Given an asset symbol "NEW_STOCK" with only 10 historical bars in the local database
+    When an API client queries "GET /api/v1/assets/NEW_STOCK/metrics"
+    Then the gateway responds with HTTP 200 OK
+    And the payload has insufficient_data set to true
+    And bars_found is 10 and bars_required is 21
+    And all computed metric fields are null.
+    """
+    db = HistoricalRatesDB()
+    db.clear_rates(symbol="NEW_STOCK")
+
+    base_time = 1700000000
+    bars = [
+        HistoricalBar(
+            symbol="NEW_STOCK",
+            timeframe="D1",
+            time=base_time + i * 86400,
+            open=50.0 + i,
+            high=51.0 + i,
+            low=49.0 + i,
+            close=50.5 + i,
+            tick_volume=1000,
+            spread=2,
+        )
+        for i in range(10)
+    ]
+    db.insert_rates(bars)
+
+    resp = client.get("/api/v1/assets/NEW_STOCK/metrics")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["symbol"] == "NEW_STOCK"
+    assert data["insufficient_data"] is True
+    assert data["bars_found"] == 10
+    assert data["bars_required"] == 21
+    assert data["last_bar_time"] == bars[-1].time
+    assert data["yang_zhang_vol_annualized"] is None
+    assert data["amihud_sensitivity"] is None
+    assert data["vwap"] is None
+    assert data["vwap_upper"] is None
+    assert data["vwap_lower"] is None
+    assert data["vwap_deviation_sigmas"] is None
+    assert data["roll_spread_pct"] is None
+    assert data["roll_spread_absolute"] is None
+
+
+def test_gateway_endpoint_degenerate_zero_volume_and_flat_market():
+    """
+    Verifies that zero-volume bars and flat market conditions return HTTP 200 with nulls/zeros
+    rather than crashing with HTTP 500 (RC6).
+    """
+    db = HistoricalRatesDB()
+    base_time = 1700000000
+
+    # 1. Zero volume 21 bars
+    db.clear_rates(symbol="ZERO_VOL_SYM")
+    zero_vol_bars = [
+        HistoricalBar(
+            symbol="ZERO_VOL_SYM",
+            timeframe="D1",
+            time=base_time + i * 86400,
+            open=100.0 + i * 0.1,
+            high=101.0 + i * 0.1,
+            low=99.0 + i * 0.1,
+            close=100.5 + i * 0.1,
+            tick_volume=0,
+            spread=2,
+        )
+        for i in range(21)
+    ]
+    db.insert_rates(zero_vol_bars)
+
+    resp_zero = client.get("/api/v1/assets/ZERO_VOL_SYM/metrics")
+    assert resp_zero.status_code == 200
+    data_zero = resp_zero.json()
+    assert data_zero["insufficient_data"] is False
+    assert data_zero["amihud_sensitivity"] is None
+    assert data_zero["vwap"] is None
+    assert data_zero["vwap_upper"] is None
+    assert data_zero["vwap_lower"] is None
+    assert data_zero["vwap_deviation_sigmas"] is None
+
+    # 2. Completely flat price action 21 bars (sigma == 0)
+    db.clear_rates(symbol="FLAT_SYM")
+    flat_bars = [
+        HistoricalBar(
+            symbol="FLAT_SYM",
+            timeframe="D1",
+            time=base_time + i * 86400,
+            open=200.0,
+            high=200.0,
+            low=200.0,
+            close=200.0,
+            tick_volume=1000,
+            spread=2,
+        )
+        for i in range(21)
+    ]
+    db.insert_rates(flat_bars)
+
+    resp_flat = client.get("/api/v1/assets/FLAT_SYM/metrics")
+    assert resp_flat.status_code == 200
+    data_flat = resp_flat.json()
+    assert data_flat["insufficient_data"] is False
+    assert data_flat["yang_zhang_vol_annualized"] == 0.0
+    assert data_flat["vwap"] == 200.0
+    assert data_flat["vwap_upper"] == 200.0
+    assert data_flat["vwap_lower"] == 200.0
+    assert data_flat["vwap_deviation_sigmas"] == 0.0
+    assert data_flat["roll_spread_pct"] == 0.0
+    assert data_flat["roll_spread_absolute"] == 0.0
+
+
+def test_gateway_endpoint_invalid_timeframe():
+    """
+    Verifies that requesting an invalid timeframe returns HTTP 400 Bad Request.
+    """
+    resp = client.get("/api/v1/assets/EURUSD/metrics?timeframe=INVALID_TF")
+    assert resp.status_code == 400
+    assert "Unsupported timeframe" in resp.json()["detail"]
 
 

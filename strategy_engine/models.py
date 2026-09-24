@@ -1,8 +1,9 @@
 """
 Data models for signals, candles, positions, and strategy engine state.
 """
+import math
 from enum import Enum
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
 
@@ -308,6 +309,50 @@ class CommitteeContext(BaseModel):
     benchmark_beta: Optional[float] = None
     relative_strength: Optional[float] = None
     data_flags: List[str] = Field(default_factory=list)
+
+
+class InstitutionalMetrics(BaseModel):
+    symbol: str
+    insufficient_data: bool = False
+    bars_found: int = 0
+    bars_required: int = 21
+    yang_zhang_vol_annualized: Optional[float] = None
+    amihud_sensitivity: Optional[float] = None
+    vwap: Optional[float] = None
+    vwap_upper: Optional[float] = None
+    vwap_lower: Optional[float] = None
+    vwap_deviation_sigmas: Optional[float] = None
+    roll_spread_pct: Optional[float] = None
+    roll_spread_absolute: Optional[float] = None
+    last_bar_time: Optional[int] = None
+    calculated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_inputs(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if isinstance(v, float) and not math.isfinite(v):
+                    data[k] = None
+        return data
+
+    @model_validator(mode="after")
+    def _sanitize_non_finite_floats(self) -> "InstitutionalMetrics":
+        float_fields = [
+            "yang_zhang_vol_annualized",
+            "amihud_sensitivity",
+            "vwap",
+            "vwap_upper",
+            "vwap_lower",
+            "vwap_deviation_sigmas",
+            "roll_spread_pct",
+            "roll_spread_absolute",
+        ]
+        for field in float_fields:
+            val = getattr(self, field)
+            if val is not None and (not isinstance(val, (int, float)) or not math.isfinite(val)):
+                setattr(self, field, None)
+        return self
 
 
 

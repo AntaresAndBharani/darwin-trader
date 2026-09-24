@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Pure Calculation Engine & Fast Gateway Route for Institutional Metrics (Issue #105, Parent #104)**:
+  - Implemented pure mathematical calculation engine in `strategy_engine/indicators.py` containing `compute_yang_zhang_volatility`, `compute_amihud_illiquidity`, `compute_vwap_and_bands`, and `compute_roll_spread` with automatic ascending chronological ordering (`time ASC`) normalization and zero-division / zero-$\sigma$ boundary guards.
+  - Added `InstitutionalMetrics` Pydantic model in `strategy_engine/models.py` with model-level non-finite float validation sanitizing `NaN` and `Inf` to `None`.
+  - Implemented `GET /api/v1/assets/{symbol}/metrics` in `api_gateway/routes_assets.py` reading strictly from local `HistoricalRatesDB` with `descending=True` to fetch latest bars, reversing to chronological order, with HTTP 404 (unsynced asset) and HTTP 200 (`insufficient_data=True`) handling without external MT5 network calls.
+  - Added unit test suite in `strategy_engine/tests/test_indicators.py` covering Gherkin acceptance criteria Scenarios 1–6, analytical benchmarks, degenerate cases, and $< 50$ ms performance budget.
+  - Added route integration tests in `api_gateway/tests/test_assets.py` covering Scenarios 7–9, zero-volume and flat-market non-crashing contracts, and timeframe validation.
+
 - **Hierarchical Category Filters & Split Columns in Asset Explorer (Issue #101)**:
   - Implemented `parse_category_parts(category, symbol)` parsing hierarchical paths into distinct Class, Region, and Exchange tuples, stripping trailing symbol names case-insensitively, normalizing empty segments to `"--"`, and preserving exact source casing (e.g. `ETFs`).
   - Replaced single category dropdown with a 3-tier cascading filter bar (`#select-class`, `#select-region`, `#select-exchange`) where Region and Exchange are dynamically populated and enabled based on parent selection, resetting child options and values cleanly on parent changes.
