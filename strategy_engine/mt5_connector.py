@@ -581,7 +581,12 @@ class MT5Connector:
         by the symbol string MD5 hash. Simulates delisted/invalid symbols by returning None.
         """
         clean_sym = symbol.strip().upper()
-        if clean_sym in ("DELISTED", "INVALID", "FAIL", "NULL") or clean_sym.endswith(".DELISTED"):
+        if (
+            clean_sym in ("DELISTED", "INVALID", "FAIL", "NULL")
+            or clean_sym.startswith("DELISTED")
+            or clean_sym.startswith("INVALID")
+            or clean_sym.endswith(".DELISTED")
+        ):
             return None
 
         # Deterministic seed from MD5 hash of uppercase symbol string
@@ -724,37 +729,100 @@ class MT5Connector:
     async def sync_historical_batch(
         self,
         symbols: List[str],
-        timeframe: str = "D1",
+        timeframe: Optional[Union[str, List[str]]] = None,
+        timeframes: Optional[List[str]] = None,
         fresh: bool = False,
+        workers: int = 10,
         db: Optional[Any] = None,
         yield_ms: float = 0.025,
     ) -> HistoricalSyncStatus:
         """
-        Asynchronously synchronizes historical rates for a batch of symbols.
-        Releases connector lock between symbols, records failed_assets for delisted
-        instruments, and yields for yield_ms (default 25ms) to prevent gateway starvation.
+        Asynchronously synchronizes historical rates for a batch of symbols using a bounded worker pool.
+        Supports both 'timeframe' and 'timeframes' parameters (normalizing 'all' to 9 canonical timeframes).
+        Limits concurrency via asyncio.Semaphore(workers) and short-circuits delisted assets on the
+        first timeframe failure.
         """
         if db is None:
             from .historical_db import HistoricalRatesDB
             db = HistoricalRatesDB()
+
+        # Canonical 9 timeframes
+        canonical = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"]
+
+        # Resolve target timeframes from either timeframe or timeframes parameter
+        target_tfs: List[str] = []
+        tf_input = timeframes if timeframes is not None else timeframe
+
+        if tf_input is None:
+            target_tfs = ["D1"]
+        elif isinstance(tf_input, str):
+            if tf_input.upper() == "ALL":
+                target_tfs = list(canonical)
+            else:
+                target_tfs = [tf_input.upper()]
+        elif isinstance(tf_input, (list, tuple)):
+            for t in tf_input:
+                if isinstance(t, str) and t.upper() == "ALL":
+                    target_tfs.extend(canonical)
+                elif isinstance(t, str):
+                    target_tfs.append(t.upper())
+        else:
+            target_tfs = ["D1"]
+
+        # Deduplicate while preserving order
+        seen_tfs = set()
+        deduped_tfs = []
+        for t in target_tfs:
+            if t not in seen_tfs:
+                seen_tfs.add(t)
+                deduped_tfs.append(t)
+        target_tfs = deduped_tfs if deduped_tfs else ["D1"]
+
+        workers_count = max(1, min(50, workers if isinstance(workers, int) else 10))
+        sem = asyncio.Semaphore(workers_count)
+        status_lock = asyncio.Lock()
 
         status = HistoricalSyncStatus(
             status="IN_PROGRESS",
             total_assets=len(symbols),
         )
 
-        for sym in symbols:
-            status.current_symbol = sym
-            bars, count = self.sync_historical_rates(
-                symbol=sym, timeframe=timeframe, fresh=fresh, db=db
-            )
-            if bars is None:
-                status.failed_assets += 1
-            else:
-                status.completed_assets += 1
+        failed_set = set()
 
-            if yield_ms > 0:
-                await asyncio.sleep(yield_ms)
+        async def worker_task(sym: str):
+            async with sem:
+                sym_failed = False
+                bars_committed = 0
+                for tf in target_tfs:
+                    bars, count = await asyncio.to_thread(
+                        self.sync_historical_rates,
+                        symbol=sym,
+                        timeframe=tf,
+                        fresh=fresh,
+                        db=db,
+                    )
+                    if bars is None:
+                        # Delisted or unavailable: fast-fail, skip remaining timeframes
+                        sym_failed = True
+                        break
+                    bars_committed += count
+                    if yield_ms > 0:
+                        await asyncio.sleep(yield_ms)
+
+                async with status_lock:
+                    if sym_failed:
+                        failed_set.add(sym)
+                        status.failed_assets = len(failed_set)
+                        status.failed_symbols = [s for s in symbols if s in failed_set]
+                    else:
+                        status.completed_assets += 1
+                        status.total_bars += bars_committed
+
+        if symbols:
+            await asyncio.gather(*(worker_task(s) for s in symbols))
+
+        status.failed_symbols = [s for s in symbols if s in failed_set]
+        status.failed_assets = len(status.failed_symbols)
 
         status.status = "COMPLETED"
         status.current_symbol = None

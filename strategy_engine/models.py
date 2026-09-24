@@ -4,7 +4,7 @@ Data models for signals, candles, positions, and strategy engine state.
 from enum import Enum
 from typing import Optional, List, Dict
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class OrderType(str, Enum):
@@ -209,9 +209,17 @@ class HistoricalSyncStatus(BaseModel):
     status: str = "IDLE"  # "IDLE", "IN_PROGRESS", "COMPLETED", "FAILED"
     completed_assets: int = 0
     failed_assets: int = 0
+    failed_symbols: List[str] = Field(default_factory=list)
     total_assets: int = 0
+    total_bars: int = 0
     current_symbol: Optional[str] = None
     message: str = ""
+
+    @model_validator(mode="after")
+    def _sync_failed_counts(self) -> "HistoricalSyncStatus":
+        if self.failed_symbols and self.failed_assets == 0:
+            self.failed_assets = len(self.failed_symbols)
+        return self
 
 
 class HistoricalSyncResponse(BaseModel):

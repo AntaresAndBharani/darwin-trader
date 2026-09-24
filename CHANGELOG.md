@@ -11,6 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Added explicit `width: auto` to `.control-label`, `#btn-fresh-restart`, `#simulation-badge`, and `#footer-status` in `tui/screens/historical_data_modal.py` to prevent flex layout collapse in Textual when `#footer-status` is empty.
 
 ### Added
+- **Parallel Batch Sync & Multi-Symbol Worker Pool (Issue #93, Parent #92)**:
+  - Augmented `StrategyConfig` in `strategy_engine/config.py` with environment-driven `mock_mode` resolution from `MOCK_MODE` (defaulting to true).
+  - Updated `HistoricalSyncStatus` in `strategy_engine/models.py` with `failed_symbols: List[str]` and `total_bars: int`, maintaining backward-compatible lockstep synchronization with `failed_assets`.
+  - Upgraded `MT5Connector.sync_historical_batch` in `strategy_engine/mt5_connector.py` to support bounded concurrency via `asyncio.Semaphore(workers)` (range 1-50, default 10), dual-keyword timeframe signatures (`timeframe` / `timeframes`), canonical 9-timeframe expansion for `'all'`, and fast-fail delisted instrument short-circuiting on first timeframe failure.
+  - Refactored `handle_sync_history` in `strategy_engine/cli.py` to route all sync requests unconditionally through the unified batch worker pool, adding input normalization for comma-separated/repeated symbols, fast-fail validation on empty symbols (`" , "`) and worker boundaries (`1 <= workers <= 50`), mutually exclusive `--live`/`--mock` flag group, and deterministic exit code contracts (`0` all ok, `1` fatal/all failed, `2` partial failure).
+  - Added comprehensive unit test suite in `strategy_engine/tests/test_cli_history.py` covering Gherkin acceptance criteria for parallel multi-symbol sync, `--timeframe all` expansion, partial failure exit code 2, worker range validation, delisted symbol fast-fail, mutually exclusive mode flags, and keyword regression safety.
+
 - **CLI Subcommand & Trading Committee Workspace Skill (Issue #85, Parent #83)**:
   - Added CLI `committee` subcommand in `strategy_engine/cli.py` (`python -m strategy_engine.cli committee <SYMBOL>`) supporting `--mode` (`entry`/`exit`), `--direction` (`long`/`short`), `--entry-price`, `--format` (`markdown`/`json`), `--benchmark`, and `--db-path`.
   - Implemented fail-closed error handling catching `HistoricalDataNotFoundError` for cold-start un-cached assets, advising the operator to execute `python -m strategy_engine.cli sync-history --symbol <SYMBOL>`.
