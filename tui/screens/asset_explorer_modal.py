@@ -628,7 +628,7 @@ class AssetExplorerModal(ModalScreen[None]):
         header = self.query_one("#metrics-drawer-header", Static)
         content = self.query_one("#metrics-drawer-content", Static)
         header.update(f"Institutional Metrics: {symbol}")
-        content.update(f"Loading institutional metrics for {symbol}...")
+        content.update(f"Loading metrics for {symbol}... (Loading institutional metrics for {symbol}...)")
 
     async def _fetch_metrics(self, request_symbol: str) -> None:
         """Asynchronously queries metrics and discards out-of-order responses."""
@@ -647,10 +647,15 @@ class AssetExplorerModal(ModalScreen[None]):
         self._render_metrics(request_symbol, metrics)
 
     def _render_metrics(self, symbol: str, metrics: Optional[InstitutionalMetrics]) -> None:
-        """Renders verified metrics, unsynced (404), or insufficient data states."""
+        """Renders verified metrics, unsynced (404), insufficient data, or degradation states."""
         header = self.query_one("#metrics-drawer-header", Static)
         content = self.query_one("#metrics-drawer-content", Static)
-        header.update(f"Institutional Metrics: {symbol}")
+
+        data_flags = getattr(metrics, "data_flags", []) or []
+        badge_markup = ""
+        if data_flags:
+            badge_markup = "  " + " ".join(f"[bold yellow]{flag}[/]" for flag in data_flags)
+        header.update(Text.from_markup(f"Institutional Metrics: {symbol}{badge_markup}"))
 
         if metrics is None:
             # Unsynced / 404 state (Scenario 11)
@@ -667,21 +672,41 @@ class AssetExplorerModal(ModalScreen[None]):
             )
             return
 
-        # Verified metrics state (Scenario 10)
-        yz_str = f"{metrics.yang_zhang_vol_annualized * 100:.1f}%" if metrics.yang_zhang_vol_annualized is not None else "--"
-        amihud_str = f"{metrics.amihud_sensitivity:.2e}" if metrics.amihud_sensitivity is not None else "--"
-        vwap_str = f"{metrics.vwap:.2f}" if metrics.vwap is not None else "--"
-        dev_str = f"{metrics.vwap_deviation_sigmas:+.2f}σ" if metrics.vwap_deviation_sigmas is not None else "--"
-        roll_str = f"{metrics.roll_spread_pct * 100:.2f}%" if metrics.roll_spread_pct is not None else "--"
+        # Verified metrics state (Scenario 7 & 10)
+        parts = []
 
-        content.update(
-            Text.from_markup(
-                f"YZ Vol: [bold]{yz_str}[/]  |  "
-                f"Amihud: [bold]{amihud_str}[/]  |  "
-                f"VWAP: [bold]{vwap_str}[/] ({dev_str})  |  "
-                f"Roll Spread: [bold]{roll_str}[/]"
-            )
-        )
+        kb_val = getattr(metrics, "kalman_beta", None)
+        kb_str = f"{kb_val:.4f}" if kb_val is not None else "--"
+        ols_val = getattr(metrics, "ols_beta", None)
+        ols_str = f"{ols_val:.4f}" if ols_val is not None else "--"
+        trend = getattr(metrics, "kalman_trend", None)
+        trend_str = f" ({trend})" if trend else ""
+
+        parts.append(f"Dynamic Kalman Beta: [bold]{kb_str}[/]{trend_str}")
+        parts.append(f"OLS Beta: [bold]{ols_str}[/]")
+
+        yz_val = getattr(metrics, "yang_zhang_vol_annualized", None)
+        yz_str = f"{yz_val * 100:.1f}%" if yz_val is not None else "--"
+        amihud_val = getattr(metrics, "amihud_sensitivity", None)
+        amihud_str = f"{amihud_val:.2e}" if amihud_val is not None else "--"
+        vwap_val = getattr(metrics, "vwap", None)
+        vwap_str = f"{vwap_val:.2f}" if vwap_val is not None else "--"
+        dev_val = getattr(metrics, "vwap_deviation_sigmas", None)
+        dev_str = f"{dev_val:+.2f}σ" if dev_val is not None else "--"
+        roll_val = getattr(metrics, "roll_spread_pct", None)
+        roll_str = f"{roll_val * 100:.2f}%" if roll_val is not None else "--"
+
+        parts.extend([
+            f"YZ Vol: [bold]{yz_str}[/]",
+            f"Amihud: [bold]{amihud_str}[/]",
+            f"VWAP: [bold]{vwap_str}[/] ({dev_str})",
+            f"Roll Spread: [bold]{roll_str}[/]",
+        ])
+
+        if data_flags:
+            parts.append(" ".join(f"[bold yellow]{flag}[/]" for flag in data_flags))
+
+        content.update(Text.from_markup("  |  ".join(parts)))
 
     @on(DataTable.RowHighlighted, "#assets-data-table")
     def on_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
