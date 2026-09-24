@@ -11,6 +11,7 @@ from strategy_engine.models import (
     AccountConnectResponse,
     AccountInfo,
     AssetInfo,
+    AssetMetricsResponse as BaseAssetMetricsResponse,
     ConnectionState,
     ConnectionStatus,
     HistoricalRatesResponse,
@@ -19,6 +20,14 @@ from strategy_engine.models import (
     InstitutionalMetrics,
     Position,
 )
+
+
+class AssetMetricsResponse(InstitutionalMetrics, BaseAssetMetricsResponse):
+    """
+    Consolidated response model combining institutional microstructure metrics
+    and dynamic systematic risk (Kalman Dynamic Beta and OLS Beta).
+    """
+    pass
 
 
 class ApiResponse(BaseModel):
@@ -336,11 +345,11 @@ class DarwinApiClient:
                 total_pages=1,
             )
 
-    async def get_asset_metrics(self, symbol: str) -> Optional[InstitutionalMetrics]:
+    async def get_asset_metrics(self, symbol: str) -> Optional[AssetMetricsResponse]:
         """
         GET /api/v1/assets/{symbol}/metrics
-        Queries institutional microstructure and volatility metrics for an asset.
-        Returns InstitutionalMetrics model on HTTP 200 (including insufficient_data=True).
+        Queries institutional microstructure, volatility, and Kalman dynamic beta metrics for an asset.
+        Returns AssetMetricsResponse model on HTTP 200 (including insufficient_data=True).
         Returns None on HTTP 404 (unsynced asset) or network failure.
         """
         clean_sym = symbol.strip().upper()
@@ -350,7 +359,7 @@ class DarwinApiClient:
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
-            return InstitutionalMetrics(**resp.json())
+            return AssetMetricsResponse(**resp.json())
         except Exception:
             return None
 

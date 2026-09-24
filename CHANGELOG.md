@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **TUI Asset Explorer Metrics Drawer & Debounced Interaction (Issue #111, Parent #108)**:
+  - Added consolidated `AssetMetricsResponse` model and updated `get_asset_metrics` in `tui/api_client.py` for asynchronous retrieval of institutional microstructure, volatility, and Kalman dynamic beta metrics.
+  - Implemented collapsible metrics drawer enhancements in `tui/screens/asset_explorer_modal.py` with `[I]` toggle, amber degradation badges for uncached/insufficient benchmark states, synchronous loading label, 150ms debouncing, and stale response discard token guard.
+  - Added widget test suite in `tui/tests/test_asset_explorer_metrics.py` covering Gherkin Scenario 7 state synchronization, debouncing, Dynamic Kalman Beta & OLS Beta rendering, amber degradation badges, and stale token discard.
+
 - **Gateway Metrics Route & Committee Calculator Integration (Issue #110, Parent #108)**:
   - Updated `strategy_engine/committee_calculator.py` to hoist single SPY benchmark fetch in `calculate()`, accept optional pre-fetched `benchmark_bars` in `compute_benchmark_beta`, deduplicate telemetry `data_flags`, and populate lean Kalman scalars (`kalman_beta`, `kalman_alpha`, `kalman_trend`) in `CommitteeContext`.
   - Updated `GET /api/v1/assets/{symbol}/metrics` in `api_gateway/routes_assets.py` to compute and return consolidated `AssetMetricsResponse` including Kalman dynamic beta, OLS beta, relative strength, common overlap bar count, beta trajectory, and deduplicated telemetry data flags while preserving all microstructure metrics.
