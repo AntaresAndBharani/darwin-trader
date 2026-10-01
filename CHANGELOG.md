@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Multi-Stage Execution Engine & Regression Defense (Issue #123, Parent #120)**:
+  - Parameterized `Backtester.__init__(..., contract_multiplier: float = 100000.0)` in `strategy_engine/backtester.py` supporting customized contract sizing with legacy default.
+  - Implemented `MultiStagePosition` lifecycle management in `strategy_engine/backtester.py` supporting `FULL -> PARTIAL -> CLOSED` transitions, initial SL enforcement, partial take-profit (+5%) scale-out with Break-Even ratchet, intrabar volatility priority (SL precedence over TP1), same-bar Break-Even sequence check, and macro Heikin-Ashi exit (`evaluate_exit`).
+  - Added regression test `test_darwin_trend_strategy_baseline_regression` in `strategy_engine/tests/test_strategy.py` pinning `DarwinTrendStrategy` baseline metrics on synthetic mock OHLCV bars.
+  - Added end-to-end backtest tests in `strategy_engine/tests/test_darwinx_zero_trader.py` covering Gherkin Scenarios 1 (two-leg winning trade), 2 (immediate stop-out), 3 (scale-out then BE exit), 8 (intrabar volatility priority), and 10 (same-bar TP1 to BE sequence) with `contract_multiplier=1.0`.
+
 - **DarwinX Strategy Implementation & Registry Wiring (Issue #122, Parent #120)**:
   - Extended `TradeSignal` in `strategy_engine/models.py` with `units`, `partial_take_profit`, and `partial_fraction`, supporting both `type` and `signal_type` accessors, and defined `PositionStage` enum (`FULL`, `PARTIAL`, `CLOSED`).
   - Added `evaluate_exit(sub_df, position)` default method to `BaseStrategy` in `strategy_engine/strategy_base.py`.
