@@ -9,6 +9,7 @@ Pure mathematical operations (NumPy) for institutional microstructure and volati
 import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
+import pandas as pd
 
 from strategy_engine.models import InstitutionalMetrics, KalmanBetaResult
 
@@ -388,5 +389,99 @@ def compute_kalman_dynamic_beta(
         beta_trajectory=beta_trajectory,
         data_flags=flags,
     )
+
+
+def compute_sma(series: pd.Series, period: int) -> pd.Series:
+    """Computes Simple Moving Average (SMA) over the given period."""
+    if period <= 0:
+        raise ValueError(f"Period must be a positive integer, got {period}")
+    return series.rolling(window=period).mean()
+
+
+def compute_ema(series: pd.Series, period: int) -> pd.Series:
+    """Computes Exponential Moving Average (EMA) over the given period."""
+    if period <= 0:
+        raise ValueError(f"Period must be a positive integer, got {period}")
+    return series.ewm(span=period, adjust=False).mean()
+
+
+def compute_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
+    """Computes standard Heikin-Ashi candlesticks and directional ha_color."""
+    res = df.copy()
+    if res.empty:
+        for col in ["ha_open", "ha_high", "ha_low", "ha_close"]:
+            res[col] = pd.Series(dtype=float)
+        res["ha_color"] = pd.Series(dtype=object)
+        return res
+
+    cols = {col.lower(): col for col in res.columns}
+    missing = [c for c in ["open", "high", "low", "close"] if c not in cols]
+    if missing:
+        raise ValueError(f"DataFrame is missing required OHLC columns: {missing}")
+
+    o, h, l, c = [res[cols[k]].to_numpy(dtype=float) for k in ["open", "high", "low", "close"]]
+    n = len(res)
+    ha_close = (o + h + l + c) / 4.0
+    ha_open = np.empty(n, dtype=float)
+    ha_open[0] = (o[0] + c[0]) / 2.0
+    for i in range(1, n):
+        ha_open[i] = (ha_open[i - 1] + ha_close[i - 1]) / 2.0
+
+    res["ha_open"] = ha_open
+    res["ha_high"] = np.maximum(h, np.maximum(ha_open, ha_close))
+    res["ha_low"] = np.minimum(l, np.minimum(ha_open, ha_close))
+    res["ha_close"] = ha_close
+    res["ha_color"] = np.where(ha_close > ha_open, "GREEN", "RED")
+    return res
+
+
+def _ensure_datetime(series: pd.Series) -> pd.Series:
+    """Coerces series to datetime64[ns], supporting ISO strings and UNIX epoch seconds."""
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series
+    return pd.to_datetime(series, unit="s") if pd.api.types.is_numeric_dtype(series) else pd.to_datetime(series)
+
+
+def align_weekly_to_h4(h4_df: pd.DataFrame, w1_df: pd.DataFrame) -> pd.DataFrame:
+    """Aligns completed weekly Heikin-Ashi indicators to 4H bars with zero-lookahead."""
+    target_cols = ["w1_ha_color_prev1", "w1_ha_color_prev2", "ha_color_prev1", "ha_color_prev2"]
+    if h4_df.empty:
+        res = h4_df.copy()
+        for col in target_cols:
+            res[col] = pd.Series(dtype=object)
+        return res
+
+    h4 = h4_df.copy()
+    time_col = "timestamp" if "timestamp" in h4.columns else ("time" if "time" in h4.columns else None)
+    if time_col is None:
+        raise KeyError("h4_df must contain 'timestamp' or 'time' column")
+    h4["timestamp"] = _ensure_datetime(h4[time_col])
+    h4 = h4.sort_values("timestamp")
+
+    if w1_df.empty:
+        for c in target_cols:
+            h4[c] = np.nan
+        return h4
+
+    w1 = w1_df.copy()
+    w1_time_col = "timestamp" if "timestamp" in w1.columns else ("time" if "time" in w1.columns else None)
+    if w1_time_col is None:
+        raise KeyError("w1_df must contain 'timestamp' or 'time' column")
+    w1["timestamp"] = _ensure_datetime(w1[w1_time_col])
+    w1 = w1.sort_values("timestamp")
+
+    if "ha_color" not in w1.columns:
+        w1 = compute_heikin_ashi(w1)
+
+    w1["w1_close_time"] = w1["timestamp"] + pd.Timedelta(days=7)
+    w1["ha_color_prev1"] = w1["ha_color"]
+    w1["ha_color_prev2"] = w1["ha_color"].shift(1)
+    w1["w1_ha_color_prev1"] = w1["ha_color_prev1"]
+    w1["w1_ha_color_prev2"] = w1["ha_color_prev2"]
+
+    cols_to_merge = ["w1_close_time"] + target_cols
+    w1_sub = w1[cols_to_merge].sort_values("w1_close_time")
+    return pd.merge_asof(h4, w1_sub, left_on="timestamp", right_on="w1_close_time", direction="backward")
+
 
 
