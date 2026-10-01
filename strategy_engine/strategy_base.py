@@ -2,7 +2,7 @@
 Abstract Base Strategy class with indicator utilities for technical analysis.
 """
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List, Optional, Any
 import pandas as pd
 import numpy as np
 
@@ -21,6 +21,14 @@ class BaseStrategy(ABC):
         and returns a TradeSignal object.
         """
         pass
+
+    def evaluate_exit(self, sub_df: pd.DataFrame, position: Any) -> Optional[SignalType]:
+        """
+        Evaluates ongoing position for an explicit strategy-driven exit signal.
+        Defaults to None (hold position according to bracket SL/TP).
+        """
+        return None
+
 
     @staticmethod
     def calculate_ema(series: pd.Series, period: int) -> pd.Series:
