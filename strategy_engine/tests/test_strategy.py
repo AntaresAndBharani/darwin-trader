@@ -70,6 +70,27 @@ def test_backtester_run():
     assert res["initial_balance"] == 100000.0
 
 
+def test_darwin_trend_strategy_baseline_regression():
+    """
+    Regression defense test pinning DarwinTrendStrategy baseline metrics on generate_mock_ohlcv(bars=300).
+    Verifies that contract_multiplier parameterization and MultiStagePosition lifecycle
+    cause zero metric drift on legacy single-stage execution.
+    """
+    config = StrategyConfig()
+    strategy = DarwinTrendStrategy(config)
+    backtester = Backtester(strategy, config, initial_balance=100000.0, contract_multiplier=100000.0)
+
+    df = generate_mock_ohlcv(bars=300)
+    res = backtester.run(df)
+
+    assert res["total_trades"] == 2
+    assert res["final_balance"] == pytest.approx(100008.65054032549, rel=1e-7)
+    assert res["win_rate_pct"] == 50.0
+    assert res["total_pnl"] == pytest.approx(8.650540325485053, rel=1e-7)
+    assert res["profit_factor"] == 1.26
+
+
+
 def test_mt5_connector_mock():
     config = StrategyConfig(mock_mode=True)
     connector = MT5Connector(config)
