@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **MTF Indicators & Zero-Lookahead Alignment Core (Issue #121, Parent #120)**:
+  - Implemented `compute_heikin_ashi(df)` in `strategy_engine/indicators.py` calculating standard Heikin-Ashi candlesticks (`ha_open`, `ha_high`, `ha_low`, `ha_close`, `ha_color`) with case-insensitive column handling and empty frame guards.
+  - Implemented pure technical indicators `compute_sma(series, period)` and `compute_ema(series, period)` with `adjust=False` recursive smoothing.
+  - Implemented `align_weekly_to_h4(h4_df, w1_df)` with synthetic availability close time (`w1_close_time = w1_open + 7d`) and backward `pd.merge_asof`, enforcing the zero-lookahead invariant so intra-week 4H bars never observe forming weekly candles.
+  - Added comprehensive automated unit test suite in `strategy_engine/tests/test_heikin_ashi.py` verifying HA mathematical formulas, SMA/EMA calculations, and Gherkin Scenario 6 MT5 boundary assertions.
+
 - **Resilient High-Concurrency SQLite Ingestion & Fault-Isolated Batch Sync (Issue #118)**:
   - Implemented `@contextmanager def _connection(self)` in `strategy_engine/historical_db.py` with `isolation_level=None`, `row_factory = sqlite3.Row`, `PRAGMA synchronous=NORMAL`, `PRAGMA busy_timeout = {self.busy_timeout};`, `PRAGMA wal_autocheckpoint=10000;`, and guaranteed connection closure in `finally`, eliminating Windows file handle leaks (`WinError 32`).
   - Refactored `insert_rates` and `clear_rates` to acquire write locks with explicit `BEGIN IMMEDIATE;`, commit via `COMMIT;`, and retry up to 5 times with exponential backoff and randomized jitter on `SQLITE_BUSY`/`SQLITE_LOCKED` contentions, logging attempts at `DEBUG` level.
