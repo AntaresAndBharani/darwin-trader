@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **DarwinX Strategy Implementation & Registry Wiring (Issue #122, Parent #120)**:
+  - Extended `TradeSignal` in `strategy_engine/models.py` with `units`, `partial_take_profit`, and `partial_fraction`, supporting both `type` and `signal_type` accessors, and defined `PositionStage` enum (`FULL`, `PARTIAL`, `CLOSED`).
+  - Added `evaluate_exit(sub_df, position)` default method to `BaseStrategy` in `strategy_engine/strategy_base.py`.
+  - Implemented `DarwinXZeroTraderStrategy` in `strategy_engine/strategies/darwinx_zero_trader.py` with 1W Heikin-Ashi watchlist filter, 4H Quad-MA trend alignment stack, warm-up NaN guard, flat position guard, and macro Heikin-Ashi exit logic.
+  - Registered `"darwinx_zero_trader"` in `strategy_engine/strategy_registry.py` along with `get_strategy()` and `list_strategies()`.
+  - Added comprehensive automated test suite in `strategy_engine/tests/test_darwinx_zero_trader.py` covering Gherkin Scenarios 4, 5, 7, 9, warm-up NaN guards, nominal BUY signal generation, and exit evaluation.
+
 - **MTF Indicators & Zero-Lookahead Alignment Core (Issue #121, Parent #120)**:
   - Implemented `compute_heikin_ashi(df)` in `strategy_engine/indicators.py` calculating standard Heikin-Ashi candlesticks (`ha_open`, `ha_high`, `ha_low`, `ha_close`, `ha_color`) with case-insensitive column handling and empty frame guards.
   - Implemented pure technical indicators `compute_sma(series, period)` and `compute_ema(series, period)` with `adjust=False` recursive smoothing.

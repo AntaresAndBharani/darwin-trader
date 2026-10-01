@@ -31,15 +31,41 @@ class Candle(BaseModel):
     volume: float = 0.0
 
 
+class PositionStage(str, Enum):
+    FULL = "FULL"
+    PARTIAL = "PARTIAL"
+    CLOSED = "CLOSED"
+
+
 class TradeSignal(BaseModel):
-    symbol: str
-    signal_type: SignalType
-    price: float
+    symbol: str = ""
+    signal_type: SignalType = SignalType.HOLD
+    price: float = 0.0
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     lot_size: float = 0.01
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     reason: str = ""
+    units: Optional[float] = None
+    partial_take_profit: Optional[float] = None
+    partial_fraction: float = 0.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _handle_type_alias(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "type" in data and "signal_type" not in data:
+                data["signal_type"] = data.pop("type")
+        return data
+
+    @property
+    def type(self) -> SignalType:
+        return self.signal_type
+
+    @type.setter
+    def type(self, val: SignalType) -> None:
+        self.signal_type = val
+
 
 
 class Position(BaseModel):
