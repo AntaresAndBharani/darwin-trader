@@ -126,3 +126,23 @@ class TestMTFAlignmentScenario6:
         assert merged.iloc[1]["w1_ha_color_prev1"] == merged.iloc[1]["ha_color_prev1"]
         with pytest.raises(KeyError, match="must contain 'timestamp' or 'time'"):
             align_weekly_to_h4(pd.DataFrame([{"close": 1.0}]), w1_df)
+
+    def test_mixed_datetime_resolution_and_tz_asof_merge(self):
+        """Verifies merge_asof does not raise MergeError when left/right have different datetime precisions or timezones."""
+        w1_df = pd.DataFrame({
+            "time": [pd.Timestamp("2024-03-04 00:00:00+00:00"), pd.Timestamp("2024-03-11 00:00:00+00:00")],
+            "open": [100.0, 108.0],
+            "high": [110.0, 109.0],
+            "low": [99.0, 95.0],
+            "close": [108.0, 96.0],
+        })
+        h4_df = pd.DataFrame({
+            "timestamp": pd.Series([pd.Timestamp("2024-03-07 12:00:00"), pd.Timestamp("2024-03-12 12:00:00")]).astype("datetime64[s]"),
+            "close": [105.5, 106.5],
+        })
+        merged = align_weekly_to_h4(h4_df, w1_df)
+        assert len(merged) == 2
+        assert pd.isna(merged.iloc[0]["w1_ha_color_prev1"])
+        assert merged.iloc[1]["w1_ha_color_prev1"] == "GREEN"
+
+

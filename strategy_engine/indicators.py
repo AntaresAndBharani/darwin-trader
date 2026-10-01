@@ -436,10 +436,12 @@ def compute_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _ensure_datetime(series: pd.Series) -> pd.Series:
-    """Coerces series to datetime64[ns], supporting ISO strings and UNIX epoch seconds."""
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return series
-    return pd.to_datetime(series, unit="s") if pd.api.types.is_numeric_dtype(series) else pd.to_datetime(series)
+    """Coerces series to datetime64[ns], supporting ISO strings, UNIX epoch seconds, and mixed resolutions."""
+    if pd.api.types.is_numeric_dtype(series):
+        dt = pd.to_datetime(series, unit="s", utc=True)
+    else:
+        dt = pd.to_datetime(series, utc=True)
+    return dt.dt.tz_localize(None).astype("datetime64[ns]")
 
 
 def align_weekly_to_h4(h4_df: pd.DataFrame, w1_df: pd.DataFrame) -> pd.DataFrame:
@@ -473,15 +475,17 @@ def align_weekly_to_h4(h4_df: pd.DataFrame, w1_df: pd.DataFrame) -> pd.DataFrame
     if "ha_color" not in w1.columns:
         w1 = compute_heikin_ashi(w1)
 
-    w1["w1_close_time"] = w1["timestamp"] + pd.Timedelta(days=7)
+    w1["w1_close_time"] = (w1["timestamp"] + pd.Timedelta(days=7)).astype(h4["timestamp"].dtype)
     w1["ha_color_prev1"] = w1["ha_color"]
     w1["ha_color_prev2"] = w1["ha_color"].shift(1)
     w1["w1_ha_color_prev1"] = w1["ha_color_prev1"]
     w1["w1_ha_color_prev2"] = w1["ha_color_prev2"]
 
     cols_to_merge = ["w1_close_time"] + target_cols
-    w1_sub = w1[cols_to_merge].sort_values("w1_close_time")
+    w1_sub = w1[cols_to_merge].sort_values("w1_close_time").copy()
+    w1_sub["w1_close_time"] = w1_sub["w1_close_time"].astype(h4["timestamp"].dtype)
     return pd.merge_asof(h4, w1_sub, left_on="timestamp", right_on="w1_close_time", direction="backward")
+
 
 
 
