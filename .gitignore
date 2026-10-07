@@ -25,6 +25,7 @@ Thumbs.db
 # Local test & build artifacts
 dist/
 build/
+node_modules/
 unit-test-summary.md
 logs/local-pipeline/
 .graph/
