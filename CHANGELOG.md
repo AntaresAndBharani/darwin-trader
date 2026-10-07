@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Positions Grid & Two-Stage Confirmed Kill Switch (Issue #129, Parent #127)**:
+  - Implemented typed `strategyApi` in `web/src/api/strategy.ts` providing REST client integration for `/api/v1/strategy/kill-switch`, `/status`, `/start`, `/pause`, and `/stop`.
+  - Implemented reusable `ConfirmModal` dialog in `web/src/components/ConfirmModal.tsx` with high-contrast danger styling, backdrop dismissal, keyboard escape handling, and action confirmation gating.
+  - Implemented `PositionsGrid` component in `web/src/components/PositionsGrid.tsx` rendering real-time tickets, symbols, volumes, open/current prices, and floating P&L synchronized via `/ws/live` and `/account/positions`.
+  - Safeguarded emergency kill switch with explicit two-stage confirmation requiring user approval before dispatching `POST /api/v1/strategy/kill-switch`, while ensuring cancellation or backdrop clicks dispatch no network requests and preserve all open positions.
+  - Added comprehensive automated unit and integration test suites in `web/src/components/PositionsGrid.test.tsx`, `web/src/components/ConfirmModal.test.tsx`, and `web/src/api/strategy.test.ts` covering Gherkin Scenarios 3 and 4.
+
 - **Frontend Project Scaffold & Status Ribbon (Issue #128, Parent #127)**:
   - Initialized React + TypeScript + Vite project under `web/` configured with TailwindCSS, PostCSS, ESLint 9, and Vitest.
   - Implemented typed API client and `useLiveTelemetry` hook consuming REST endpoints (`/api/v1/account/status`, `/info`, `/positions`) and `/ws/live` WebSocket stream with automatic reconnection and polling.
