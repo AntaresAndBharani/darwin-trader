@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Frontend Project Scaffold & Status Ribbon (Issue #128, Parent #127)**:
+  - Initialized React + TypeScript + Vite project under `web/` configured with TailwindCSS, PostCSS, ESLint 9, and Vitest.
+  - Implemented typed API client and `useLiveTelemetry` hook consuming REST endpoints (`/api/v1/account/status`, `/info`, `/positions`) and `/ws/live` WebSocket stream with automatic reconnection and polling.
+  - Implemented `StatusRibbon` component displaying real-time balance, equity, and free margin from `/ws/live`, MT5 latency and status from `/account/status`, floating P&L, D-Score, and server telemetry.
+  - Configured Vite reverse proxy to `http://localhost:8000` forwarding `/api` and `/ws` to prevent local CORS issues.
+  - Updated GitHub Actions CI workflow in `.github/workflows/build.yml` with Node.js 20 setup, `npm ci`, `npm test`, `npm run lint`, and `npm run build`.
+  - Added comprehensive automated unit tests for `StatusRibbon` and `client.ts` in `web/src/components/StatusRibbon.test.tsx` and `web/src/api/client.test.ts` covering Gherkin Scenarios 1 and 5.
+
 - **Multi-Stage Execution Engine & Regression Defense (Issue #123, Parent #120)**:
   - Parameterized `Backtester.__init__(..., contract_multiplier: float = 100000.0)` in `strategy_engine/backtester.py` supporting customized contract sizing with legacy default.
   - Implemented `MultiStagePosition` lifecycle management in `strategy_engine/backtester.py` supporting `FULL -> PARTIAL -> CLOSED` transitions, initial SL enforcement, partial take-profit (+5%) scale-out with Break-Even ratchet, intrabar volatility priority (SL precedence over TP1), same-bar Break-Even sequence check, and macro Heikin-Ashi exit (`evaluate_exit`).
