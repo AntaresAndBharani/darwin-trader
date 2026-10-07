@@ -1,8 +1,12 @@
-import type { FC } from 'react';
+import { FC, useState } from 'react';
 import { StatusRibbon } from './components/StatusRibbon';
 import { PositionsGrid } from './components/PositionsGrid';
+import { StrategySidebar } from './components/StrategySidebar';
+import { ConnectModal } from './components/ConnectModal';
 
 export const App: FC = () => {
+  const [isConnectOpen, setIsConnectOpen] = useState<boolean>(false);
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans">
       {/* Top Telemetry Status Ribbon */}
@@ -20,6 +24,14 @@ export const App: FC = () => {
               Visual Algorithmic Trading Platform &middot; Hardware-accelerated TradingView &amp; MetaTrader 5 Bridge
             </p>
           </div>
+          <button
+            type="button"
+            data-testid="header-connect-btn"
+            onClick={() => setIsConnectOpen(true)}
+            className="px-3.5 py-1.5 text-xs font-semibold rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition-colors flex items-center gap-1.5 cursor-pointer"
+          >
+            <span>Connect MT5...</span>
+          </button>
         </header>
 
         {/* Dashboard overview container */}
@@ -44,9 +56,22 @@ export const App: FC = () => {
           </div>
         </div>
 
-        {/* Real-time Positions Grid & Two-Stage Confirmed Kill Switch */}
-        <PositionsGrid />
+        {/* Workspace Layout: Positions Grid + Strategy Lifecycle Sidebar */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+          <div className="lg:col-span-2">
+            <PositionsGrid />
+          </div>
+          <div className="lg:col-span-1">
+            <StrategySidebar onOpenConnect={() => setIsConnectOpen(true)} />
+          </div>
+        </div>
       </main>
+
+      {/* MetaTrader 5 Connect Modal */}
+      <ConnectModal
+        isOpen={isConnectOpen}
+        onClose={() => setIsConnectOpen(false)}
+      />
     </div>
   );
 };

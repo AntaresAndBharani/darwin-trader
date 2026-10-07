@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Strategy Lifecycle Controls & Connect Dialog (Issue #130, Parent #127)**:
+  - Implemented typed `accountApi` in `web/src/api/account.ts` providing REST client integration for `/api/v1/account/connect` with MT5 account credentials and broker server configuration.
+  - Implemented `ConnectModal` dialog in `web/src/components/ConnectModal.tsx` allowing input of MT5 login, password, and server, supporting simulation/mock toggling, form validation, backdrop and escape dismissal, and reactive error alerts.
+  - Implemented `StrategySidebar` component in `web/src/components/StrategySidebar.tsx` managing strategy lifecycle state via `GET /strategy/status`, `POST /strategy/start`, `POST /strategy/pause`, and `POST /strategy/stop`, with state-reactive action buttons, execution error banners, and strategy metadata indicators.
+  - Integrated `StrategySidebar` and `ConnectModal` into `web/src/App.tsx` with responsive layout and header connection trigger.
+  - Added comprehensive automated unit and integration test suites in `web/src/components/StrategySidebar.test.tsx`, `web/src/components/ConnectModal.test.tsx`, `web/src/api/account.test.ts`, and `web/src/App.test.tsx` covering Gherkin Scenarios 5 and 6.
+
 - **Positions Grid & Two-Stage Confirmed Kill Switch (Issue #129, Parent #127)**:
   - Implemented typed `strategyApi` in `web/src/api/strategy.ts` providing REST client integration for `/api/v1/strategy/kill-switch`, `/status`, `/start`, `/pause`, and `/stop`.
   - Implemented reusable `ConfirmModal` dialog in `web/src/components/ConfirmModal.tsx` with high-contrast danger styling, backdrop dismissal, keyboard escape handling, and action confirmation gating.
