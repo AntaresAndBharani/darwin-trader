@@ -1,5 +1,6 @@
 import type { FC } from 'react';
 import { StatusRibbon } from './components/StatusRibbon';
+import { PositionsGrid } from './components/PositionsGrid';
 
 export const App: FC = () => {
   return (
@@ -42,6 +43,9 @@ export const App: FC = () => {
             </p>
           </div>
         </div>
+
+        {/* Real-time Positions Grid & Two-Stage Confirmed Kill Switch */}
+        <PositionsGrid />
       </main>
     </div>
   );
