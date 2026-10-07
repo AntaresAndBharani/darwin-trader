@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { App } from './App';
 import { strategyApi } from './api/strategy';
 import { api } from './api/client';
+import { assetsApi } from './api/assets';
 
 describe('App', () => {
   beforeEach(() => {
@@ -25,6 +26,17 @@ describe('App', () => {
       account_equity: 100000,
       d_score: 75.0,
     });
+    vi.spyOn(assetsApi, 'getHistory').mockResolvedValue({
+      symbol: 'EURUSD',
+      timeframe: 'D1',
+      bars: [],
+      total_bars: 0,
+      limit: 500,
+      offset: 0,
+      page: 1,
+      total_pages: 1,
+    });
+    vi.spyOn(assetsApi, 'getMetrics').mockResolvedValue(null as unknown as import('./api/assets').AssetMetricsResponse);
   });
 
   it('renders all core components and opens ConnectModal via header button', async () => {
@@ -34,6 +46,7 @@ describe('App', () => {
       expect(screen.getByTestId('status-ribbon')).toBeInTheDocument();
       expect(screen.getByTestId('positions-grid')).toBeInTheDocument();
       expect(screen.getByTestId('strategy-sidebar')).toBeInTheDocument();
+      expect(screen.getByTestId('chart-workspace')).toBeInTheDocument();
     });
     expect(screen.queryByTestId('connect-modal')).not.toBeInTheDocument();
 

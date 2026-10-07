@@ -3,6 +3,7 @@ import { StatusRibbon } from './components/StatusRibbon';
 import { PositionsGrid } from './components/PositionsGrid';
 import { StrategySidebar } from './components/StrategySidebar';
 import { ConnectModal } from './components/ConnectModal';
+import { ChartWorkspace } from './components/ChartWorkspace';
 
 export const App: FC = () => {
   const [isConnectOpen, setIsConnectOpen] = useState<boolean>(false);
@@ -55,6 +56,11 @@ export const App: FC = () => {
             </p>
           </div>
         </div>
+
+        {/* TradingView Chart Workspace */}
+        <section>
+          <ChartWorkspace />
+        </section>
 
         {/* Workspace Layout: Positions Grid + Strategy Lifecycle Sidebar */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">

@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **TradingView Chart Workspace & Client-Side Transforms (Issue #131, Parent #127)**:
+  - Integrated TradingView Lightweight Charts canvas in `web/src/components/ChartWorkspace.tsx` with responsive layout and pan/zoom controls.
+  - Implemented typed `assetsApi` in `web/src/api/assets.ts` providing REST client integration for `GET /api/v1/assets/{symbol}/history`, `GET /metrics`, `POST /history/sync`, and `GET /history/sync/status`.
+  - Implemented client-side Heikin-Ashi calculation engine in `web/src/utils/heikinAshi.ts` adhering strictly to Scenario 8 formulas (`HA_Close = (Open + High + Low + Close) / 4`, `HA_Open = (prev_HA_Open + prev_HA_Close) / 2`, `HA_High = max`, `HA_Low = min`) with zero backend indicator round-trips.
+  - Implemented metrics side panel displaying scalar Kalman Dynamic Beta, Kalman Alpha, Kalman Trend, and institutional microstructure indicators (Yang-Zhang Volatility, Amihud Sensitivity, VWAP, Roll Spread, OLS Beta, Relative Strength).
+  - Implemented asynchronous historical rates synchronization flow with polling telemetry and automatic chart refresh upon completion.
+  - Integrated `ChartWorkspace` into `web/src/App.tsx` and added comprehensive automated test suites in `web/src/components/ChartWorkspace.test.tsx`, `web/src/utils/heikinAshi.test.ts`, `web/src/api/assets.test.ts`, and updated `web/src/test/setup.ts` and `web/src/App.test.tsx`.
+
 - **Strategy Lifecycle Controls & Connect Dialog (Issue #130, Parent #127)**:
   - Implemented typed `accountApi` in `web/src/api/account.ts` providing REST client integration for `/api/v1/account/connect` with MT5 account credentials and broker server configuration.
   - Implemented `ConnectModal` dialog in `web/src/components/ConnectModal.tsx` allowing input of MT5 login, password, and server, supporting simulation/mock toggling, form validation, backdrop and escape dismissal, and reactive error alerts.
