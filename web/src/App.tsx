@@ -1,12 +1,53 @@
-import { FC, useState } from 'react';
+import { FC, useState, useEffect, useRef } from 'react';
 import { StatusRibbon } from './components/StatusRibbon';
 import { PositionsGrid } from './components/PositionsGrid';
 import { StrategySidebar } from './components/StrategySidebar';
-import { ConnectModal } from './components/ConnectModal';
+import {
+  ConnectModal,
+  DEFAULT_LOGIN,
+  DEFAULT_SERVER,
+  DEFAULT_TERMINAL_PATH,
+} from './components/ConnectModal';
 import { ChartWorkspace } from './components/ChartWorkspace';
+import { api } from './api/client';
+import { accountApi } from './api/account';
 
 export const App: FC = () => {
   const [isConnectOpen, setIsConnectOpen] = useState<boolean>(false);
+  const autoConnectAttemptedRef = useRef<boolean>(false);
+
+  // Automatically attach to Darwinex-Live (4000073238) on mount if Gateway is still in default state
+  useEffect(() => {
+    if (autoConnectAttemptedRef.current) return;
+    autoConnectAttemptedRef.current = true;
+
+    let isMounted = true;
+    (async () => {
+      try {
+        const status = await api.getConnectionStatus();
+        if (!isMounted) return;
+
+        const isDefaultUnconfigured =
+          status.status !== 'CONNECTED' ||
+          (status.mock_mode === true && status.server === 'Darwinex-Demo');
+
+        if (isDefaultUnconfigured) {
+          await accountApi.connect({
+            login: DEFAULT_LOGIN,
+            server: DEFAULT_SERVER,
+            path: DEFAULT_TERMINAL_PATH,
+            mock_mode: false,
+          });
+        }
+      } catch {
+        // Silent background auto-connect attempt; StatusRibbon displays current state
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans">

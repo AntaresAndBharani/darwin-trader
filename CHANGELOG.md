@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Unified Web & TUI Startup, Auto-Connect, and ConnectModal Parity (`001-web-tui-parity`)**:
+  - Ratified project engineering governance in `.specify/memory/constitution.md` (`v1.0.0`) establishing Clean Architecture, Darwinex Zero Risk Guardrails, Multi-Client TUI/Web Parity, Test-First Simulation, and Concurrency Lock Discipline.
+  - Implemented `darwinGatewayPlugin` in `web/vite.config.ts` and created `scripts/run-web.ps1` (mirroring `scripts/run-tui.ps1`) so running `npm run web`, `npm run dev`, or `.\scripts\run-web.ps1` automatically checks/starts the FastAPI Gateway on `127.0.0.1:8000`, auto-connects to Account `4000073238` on `Darwinex-Live` (`mock_mode: false`), and cleanly stops any self-spawned Gateway process on exit.
+  - Updated `web/src/App.tsx` to perform a mount-time background auto-connect to `4000073238` on `Darwinex-Live` (`mock_mode: false`) if the Gateway is still in its unconfigured startup default state, while keeping `ConnectModal` closed unless explicitly opened by the operator.
+  - Aligned `web/src/components/ConnectModal.tsx` 1:1 with `tui/screens/connect_modal.py` (`DEFAULT_LOGIN = 4000073238`, `DEFAULT_SERVER = 'Darwinex-Live'`, `SERVER_CHOICES = ['Darwinex-Demo', 'Darwinex-Live', 'MetaQuotes-Demo']`, `DEFAULT_TERMINAL_PATH = 'C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe'`, optional password for Win32 IPC attach, and `mockMode = false` by default).
+  - Updated and expanded automated unit and integration tests in `web/src/components/ConnectModal.test.tsx` and `web/src/App.test.tsx`.
+
 - **TradingView Chart Workspace & Client-Side Transforms (Issue #131, Parent #127)**:
   - Integrated TradingView Lightweight Charts canvas in `web/src/components/ChartWorkspace.tsx` with responsive layout and pan/zoom controls.
   - Implemented typed `assetsApi` in `web/src/api/assets.ts` providing REST client integration for `GET /api/v1/assets/{symbol}/history`, `GET /metrics`, `POST /history/sync`, and `GET /history/sync/status`.
