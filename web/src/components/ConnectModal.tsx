@@ -1,25 +1,39 @@
 import { FC, useState, useEffect, FormEvent, MouseEvent } from 'react';
 import { accountApi, AccountConnectResponse } from '../api/account';
 
+export const DEFAULT_TERMINAL_PATH = 'C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe';
+export const DEFAULT_LOGIN = 4000073238;
+export const DEFAULT_SERVER = 'Darwinex-Live';
+export const SERVER_CHOICES = ['Darwinex-Demo', 'Darwinex-Live', 'MetaQuotes-Demo'] as const;
+
 export interface ConnectModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: (response: AccountConnectResponse) => void;
   defaultServer?: string;
   defaultLogin?: number | string;
+  defaultPath?: string;
+  defaultMockMode?: boolean;
 }
 
 export const ConnectModal: FC<ConnectModalProps> = ({
   isOpen,
   onClose,
   onSuccess,
-  defaultServer = 'Darwinex-Demo',
-  defaultLogin = '',
+  defaultServer = DEFAULT_SERVER,
+  defaultLogin = DEFAULT_LOGIN,
+  defaultPath = DEFAULT_TERMINAL_PATH,
+  defaultMockMode = false,
 }) => {
   const [server, setServer] = useState<string>(defaultServer);
-  const [login, setLogin] = useState<string>(String(defaultLogin || ''));
+  const [login, setLogin] = useState<string>(
+    defaultLogin !== undefined && defaultLogin !== null && defaultLogin !== ''
+      ? String(defaultLogin)
+      : ''
+  );
   const [password, setPassword] = useState<string>('');
-  const [mockMode, setMockMode] = useState<boolean>(true);
+  const [path, setPath] = useState<string>(defaultPath);
+  const [mockMode, setMockMode] = useState<boolean>(defaultMockMode);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,10 +41,16 @@ export const ConnectModal: FC<ConnectModalProps> = ({
     if (isOpen) {
       setError(null);
       setServer(defaultServer);
-      setLogin(String(defaultLogin || ''));
+      setLogin(
+        defaultLogin !== undefined && defaultLogin !== null && defaultLogin !== ''
+          ? String(defaultLogin)
+          : ''
+      );
       setPassword('');
+      setPath(defaultPath);
+      setMockMode(defaultMockMode);
     }
-  }, [isOpen, defaultServer, defaultLogin]);
+  }, [isOpen, defaultServer, defaultLogin, defaultPath, defaultMockMode]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -59,13 +79,16 @@ export const ConnectModal: FC<ConnectModalProps> = ({
       return;
     }
 
+    const trimmedPath = path.trim();
+
     try {
       setIsLoading(true);
       setError(null);
       const res = await accountApi.connect({
         login: loginNum,
         password,
-        server: server.trim(),
+        server: server.trim() || DEFAULT_SERVER,
+        path: trimmedPath ? trimmedPath : null,
         mock_mode: mockMode,
       });
 
@@ -86,6 +109,10 @@ export const ConnectModal: FC<ConnectModalProps> = ({
     }
   };
 
+  const serverOptions = SERVER_CHOICES.includes(server as (typeof SERVER_CHOICES)[number])
+    ? [...SERVER_CHOICES]
+    : [server, ...SERVER_CHOICES];
+
   return (
     <div
       data-testid="connect-modal-backdrop"
@@ -105,7 +132,7 @@ export const ConnectModal: FC<ConnectModalProps> = ({
               <span className="text-emerald-400">MetaTrader 5</span> Connection
             </h2>
             <p className="text-xs text-zinc-400 mt-0.5">
-              Enter your broker credentials to establish a gateway bridge.
+              Attach to running Darwinex MT5 terminal or enter broker credentials.
             </p>
           </div>
           <button
@@ -133,25 +160,8 @@ export const ConnectModal: FC<ConnectModalProps> = ({
 
         <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-3.5">
           <div className="flex flex-col gap-1">
-            <label htmlFor="connect-server" className="text-xs font-semibold text-zinc-300">
-              Server
-            </label>
-            <input
-              id="connect-server"
-              data-testid="connect-server-input"
-              type="text"
-              required
-              value={server}
-              onChange={(e) => setServer(e.target.value)}
-              disabled={isLoading}
-              placeholder="e.g. Darwinex-Demo or MetaQuotes-Demo"
-              className="px-3 py-1.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
-            />
-          </div>
-
-          <div className="flex flex-col gap-1">
             <label htmlFor="connect-login" className="text-xs font-semibold text-zinc-300">
-              MT5 Login Account
+              Login ID
             </label>
             <input
               id="connect-login"
@@ -161,14 +171,14 @@ export const ConnectModal: FC<ConnectModalProps> = ({
               value={login}
               onChange={(e) => setLogin(e.target.value)}
               disabled={isLoading}
-              placeholder="e.g. 50123456"
+              placeholder="e.g. 4000073238"
               className="px-3 py-1.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
             />
           </div>
 
           <div className="flex flex-col gap-1">
             <label htmlFor="connect-password" className="text-xs font-semibold text-zinc-300">
-              Password
+              Password (Optional for running terminal)
             </label>
             <input
               id="connect-password"
@@ -177,8 +187,45 @@ export const ConnectModal: FC<ConnectModalProps> = ({
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={isLoading}
-              placeholder="Master or Investor Password"
+              placeholder="Leave empty to attach to running MT5"
               className="px-3 py-1.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label htmlFor="connect-server" className="text-xs font-semibold text-zinc-300">
+              Server
+            </label>
+            <select
+              id="connect-server"
+              data-testid="connect-server-input"
+              required
+              value={server}
+              onChange={(e) => setServer(e.target.value)}
+              disabled={isLoading}
+              className="px-3 py-1.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+            >
+              {serverOptions.map((srv) => (
+                <option key={srv} value={srv}>
+                  {srv}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label htmlFor="connect-path" className="text-xs font-semibold text-zinc-300">
+              Terminal Path (Optional)
+            </label>
+            <input
+              id="connect-path"
+              data-testid="connect-path-input"
+              type="text"
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              disabled={isLoading}
+              placeholder="Optional path to terminal64.exe"
+              className="px-3 py-1.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50 font-mono"
             />
           </div>
 
@@ -193,7 +240,7 @@ export const ConnectModal: FC<ConnectModalProps> = ({
               className="rounded bg-zinc-950 border-zinc-700 text-emerald-500 focus:ring-emerald-500 h-4 w-4"
             />
             <label htmlFor="connect-mock-mode" className="text-xs text-zinc-400 select-none">
-              Simulation / Mock Mode (Safe Sandbox)
+              Mock Mode (Simulation Sandbox)
             </label>
           </div>
 

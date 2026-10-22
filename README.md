@@ -1,6 +1,6 @@
 # Darwin Trader
 
-An algorithmic trading platform designed for MetaTrader 5 (MT5) with a modern Terminal User Interface (Textual TUI), a FastAPI gateway, and a high-performance Python quantitative strategy backtesting and execution engine.
+An algorithmic trading platform designed for MetaTrader 5 (MT5) with a modern Terminal User Interface (Textual TUI), a React/TradingView Web Dashboard, a FastAPI gateway, and a high-performance Python quantitative strategy backtesting and execution engine.
 
 ---
 
@@ -8,8 +8,8 @@ An algorithmic trading platform designed for MetaTrader 5 (MT5) with a modern Te
 
 ```
 +-------------------------------------------------------------------------+
-|                      Darwin Trader TUI (tui/)                           |
-|                   Python · Textual · AsyncIO Telemetry                  |
+|        Darwin Trader TUI (tui/)  &  Web Dashboard (web/)                |
+|        Python · Textual · React · TradingView · AsyncIO Telemetry       |
 +-------------------------------------------------------------------------+
                                     |
                                     v (REST API / WebSocket)
@@ -30,8 +30,8 @@ An algorithmic trading platform designed for MetaTrader 5 (MT5) with a modern Te
 ## 🚀 Features
 
 - **Real-Time Account Telemetry:** Monitor equity, balance, floating PnL, and live MT5 positions via 1Hz WebSocket streaming.
-- **Interactive Terminal UI (TUI):** Asynchronous, keyboard-driven ANSI dashboard with interactive modals (Asset Explorer, Account Connection, Confirmation), live summary cards, and keyed differential tables.
-- **Strategy Control & Risk Management:** Configure live risk percentage, max daily drawdown caps, and magic numbers directly from the TUI or REST API.
+- **Interactive Terminal UI (TUI) & Web Dashboard:** Unified single-command server launch (`.\scripts\run-tui.ps1`, `.\scripts\run-web.ps1`, or `npm run web` in `web/`) with automatic FastAPI Gateway orchestration and zero-click passwordless attachment to `Darwinex-Live` (`4000073238`).
+- **Strategy Control & Risk Management:** Configure live risk percentage, max daily drawdown caps, and magic numbers directly from the TUI, Web UI, or REST API.
 - **Backtesting Simulation Engine:** Run bar-by-bar backtests on EURUSD and major pairs, inspect win rates, profit factors, and maximum drawdown curves.
 - **Multi-Symbol Historical Ingestion & Granular Purge:** Parallel historical bar ingestion with worker pool concurrency and granular timeframe/asset purge capabilities.
 - **Darwinex Zero Compliance:** Prioritizes capital preservation, strict daily drawdown constraints, dynamic volatility-adjusted position sizing, and algorithmic consistency.
@@ -42,16 +42,22 @@ An algorithmic trading platform designed for MetaTrader 5 (MT5) with a modern Te
 
 ### 1. Run Complete Test Suite
 ```powershell
-# Run all unit and integration tests across Gateway, Strategy Engine, and TUI
+# Run all Python unit and integration tests across Gateway, Strategy Engine, and TUI
 pytest api_gateway/tests strategy_engine/tests tui/tests
+
+# Run Web frontend unit/integration tests, linter, and production build
+cd web ; npm test ; npm run lint ; npm run build
 ```
 
-### 2. Launch Terminal User Interface (TUI)
+### 2. Launch Terminal User Interface (TUI) or Web Dashboard
 ```powershell
-# Launch the Textual TUI dashboard
+# Launch the Textual TUI dashboard (auto-starts FastAPI Gateway + connects to Darwinex-Live)
 .\scripts\run-tui.ps1
-# or directly via python
-python -m tui.app
+
+# Launch the Web Dashboard (auto-starts FastAPI Gateway + connects to Darwinex-Live)
+.\scripts\run-web.ps1
+# or directly inside web/
+cd web ; npm run web
 ```
 
 ---
