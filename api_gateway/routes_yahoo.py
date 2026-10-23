@@ -1,0 +1,299 @@
+"""
+FastAPI Router for Yahoo Finance Market Data, Ticker Metadata, Fundamentals & Sync.
+"""
+from __future__ import annotations
+
+import threading
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from strategy_engine.yahoo_db import YahooFinanceDB, parse_market_symbol
+from strategy_engine.yahoo_fetcher import sync_yahoo_tickers
+
+router = APIRouter(prefix="/api/v1/yahoo", tags=["Yahoo Finance"])
+
+yahoo_db = YahooFinanceDB()
+_yahoo_lock = threading.Lock()
+
+_sync_state: Dict[str, Any] = {
+    "status": "IDLE",
+    "total_tickers": 0,
+    "completed_tickers": 0,
+    "failed_tickers": 0,
+    "rows_upserted": 0,
+    "valuations_upserted": 0,
+    "message": "Idle",
+}
+
+
+class YahooTickerCreateRequest(BaseModel):
+    symbol: str = Field(..., description="Ticker symbol or MARKET:SYMBOL")
+    name: Optional[str] = ""
+    market: Optional[str] = ""
+    sector: Optional[str] = ""
+    industry: Optional[str] = ""
+    active: bool = True
+
+
+class YahooTickerUpdateRequest(BaseModel):
+    active: Optional[bool] = None
+    name: Optional[str] = None
+    market: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+
+
+class YahooSyncRequest(BaseModel):
+    symbol: Optional[str] = None
+    symbols: Optional[List[str]] = None
+    include_fundamentals: bool = True
+    include_valuation: bool = True
+    include_metadata: bool = True
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    workers: int = Field(default=5, ge=1, le=32)
+
+
+@router.get("/tickers")
+def list_yahoo_tickers(
+    market: Optional[str] = Query(default=None),
+    sector: Optional[str] = Query(default=None),
+    industry: Optional[str] = Query(default=None),
+    active_only: bool = Query(default=False),
+    active: Optional[bool] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
+    """List Yahoo Finance tickers with optional filtering and filter dropdown facets."""
+    tickers = yahoo_db.get_tickers(
+        market=market,
+        sector=sector,
+        industry=industry,
+        active=active,
+        active_only=active_only,
+        search=search,
+    )
+    facets = yahoo_db.get_filter_facets()
+    return {
+        "total": len(tickers),
+        "tickers": tickers,
+        "facets": facets,
+    }
+
+
+@router.post("/tickers")
+def create_or_upsert_yahoo_ticker(req: YahooTickerCreateRequest) -> Dict[str, Any]:
+    """Create or update a ticker in YahooFinanceDB."""
+    sym, mkt = parse_market_symbol(req.symbol, req.market or "")
+    if not sym:
+        raise HTTPException(status_code=400, detail="Ticker symbol cannot be empty.")
+
+    yahoo_db.upsert_tickers(
+        [
+            {
+                "symbol": sym,
+                "name": (req.name or sym).strip(),
+                "market": mkt,
+                "sector": (req.sector or "").strip(),
+                "industry": (req.industry or "").strip(),
+                "active": req.active,
+            }
+        ]
+    )
+    ticker = yahoo_db.get_ticker(sym)
+    if not ticker:
+        raise HTTPException(status_code=500, detail=f"Failed to persist ticker '{sym}'.")
+    return ticker
+
+
+@router.patch("/tickers/{symbol}")
+def update_yahoo_ticker(symbol: str, req: YahooTickerUpdateRequest) -> Dict[str, Any]:
+    """Update ticker active state or metadata."""
+    sym, _ = parse_market_symbol(symbol)
+    if not sym:
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol.")
+
+    updated = yahoo_db.update_ticker(
+        sym,
+        active=req.active,
+        name=req.name,
+        market=req.market,
+        sector=req.sector,
+        industry=req.industry,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Ticker '{sym}' not found.")
+    return updated
+
+
+@router.delete("/tickers/{symbol}")
+def delete_yahoo_ticker(symbol: str) -> Dict[str, Any]:
+    """Delete a ticker and all associated OHLCV and valuation records."""
+    sym, _ = parse_market_symbol(symbol)
+    if not sym:
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol.")
+
+    res = yahoo_db.delete_ticker(sym)
+    if not res.get("deleted"):
+        raise HTTPException(status_code=404, detail=f"Ticker '{sym}' not found.")
+    return res
+
+
+@router.get("/tickers/{symbol}/history")
+def get_yahoo_ticker_history(
+    symbol: str,
+    timeframe: str = Query(default="D1"),
+    limit: int = Query(default=1500, ge=1, le=10000),
+) -> Dict[str, Any]:
+    """Get daily or resampled weekly/monthly OHLCV bars for a ticker."""
+    sym, _ = parse_market_symbol(symbol)
+    if not sym:
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol.")
+
+    tf = (timeframe or "D1").strip().upper()
+    if tf not in {"D1", "W1", "MN1"}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported timeframe '{timeframe}'. Supported: D1, W1, MN1.",
+        )
+
+    bars, total_bars = yahoo_db.get_price_history(sym, timeframe=tf, limit=limit)
+    return {
+        "symbol": sym,
+        "timeframe": tf,
+        "total_bars": total_bars,
+        "bars": bars,
+    }
+
+
+@router.get("/tickers/{symbol}/fundamentals")
+def get_yahoo_ticker_fundamentals(symbol: str) -> Dict[str, Any]:
+    """Get latest valuation snapshot, historical quarterly valuation table, and quarterly EPS/revenue."""
+    sym, _ = parse_market_symbol(symbol)
+    if not sym:
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol.")
+
+    return yahoo_db.get_fundamentals_summary(sym)
+
+
+def _execute_sync_job(
+    target_symbols: Optional[List[str]],
+    include_fundamentals: bool,
+    include_valuation: bool,
+    include_metadata: bool,
+    start_date: Optional[str],
+    end_date: Optional[str],
+    workers: int,
+) -> Dict[str, Any]:
+    """Internal worker that executes sync_yahoo_tickers and updates _sync_state."""
+    def _on_progress(symbol: str = "", completed: int = 0, failed: int = 0, total: int = 0):
+        with _yahoo_lock:
+            _sync_state["total_tickers"] = total
+            _sync_state["completed_tickers"] = completed
+            _sync_state["failed_tickers"] = failed
+            _sync_state["message"] = f"Syncing {symbol} ({completed + failed}/{total})..."
+
+    try:
+        summary = sync_yahoo_tickers(
+            db=yahoo_db,
+            symbols=target_symbols,
+            include_fundamentals=include_fundamentals,
+            include_valuation=include_valuation,
+            include_metadata=include_metadata,
+            start_date=start_date,
+            end_date=end_date,
+            workers=workers,
+            progress_callback=_on_progress,
+        )
+        with _yahoo_lock:
+            total = summary["total_symbols"]
+            completed = summary["completed_symbols"]
+            failed_cnt = len(summary["failed_symbols"])
+            _sync_state.update(
+                {
+                    "status": "FAILED" if (total > 0 and completed == 0 and failed_cnt > 0) else "COMPLETED",
+                    "total_tickers": total,
+                    "completed_tickers": completed,
+                    "failed_tickers": failed_cnt,
+                    "rows_upserted": summary["upserted_prices"],
+                    "valuations_upserted": summary["upserted_valuations"],
+                    "message": f"Synced {completed}/{total} ticker(s)",
+                }
+            )
+            return dict(_sync_state)
+    except Exception as exc:
+        with _yahoo_lock:
+            _sync_state.update(
+                {
+                    "status": "FAILED",
+                    "message": f"Sync error: {exc}",
+                }
+            )
+            return dict(_sync_state)
+
+
+@router.post("/sync", response_model=None)
+def trigger_yahoo_sync(req: YahooSyncRequest, background_tasks: BackgroundTasks):
+    """
+    Trigger on-demand Yahoo Finance synchronization.
+    - Single ticker (`symbol` provided): executes synchronously and returns 200 OK.
+    - Batch catch-up (`symbol` omitted): runs in background and returns 202 Accepted.
+    """
+    with _yahoo_lock:
+        if _sync_state["status"] == "IN_PROGRESS":
+            raise HTTPException(
+                status_code=409,
+                detail="A Yahoo Finance synchronization job is already in progress.",
+            )
+        _sync_state.update(
+            {
+                "status": "IN_PROGRESS",
+                "total_tickers": 1 if req.symbol else 0,
+                "completed_tickers": 0,
+                "failed_tickers": 0,
+                "rows_upserted": 0,
+                "valuations_upserted": 0,
+                "message": "Starting Yahoo Finance synchronization...",
+            }
+        )
+
+    target_symbols: Optional[List[str]] = None
+    if req.symbol and req.symbol.strip():
+        target_symbols = [req.symbol.strip()]
+    elif req.symbols:
+        target_symbols = [s.strip() for s in req.symbols if s and s.strip()]
+
+    if target_symbols and len(target_symbols) == 1:
+        result = _execute_sync_job(
+            target_symbols=target_symbols,
+            include_fundamentals=req.include_fundamentals,
+            include_valuation=req.include_valuation,
+            include_metadata=req.include_metadata,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            workers=1,
+        )
+        return result
+
+    background_tasks.add_task(
+        _execute_sync_job,
+        target_symbols,
+        req.include_fundamentals,
+        req.include_valuation,
+        req.include_metadata,
+        req.start_date,
+        req.end_date,
+        req.workers,
+    )
+    with _yahoo_lock:
+        snapshot = dict(_sync_state)
+    return JSONResponse(status_code=202, content=snapshot)
+
+
+@router.get("/sync/status")
+def get_yahoo_sync_status() -> Dict[str, Any]:
+    """Return current Yahoo Finance synchronization job status."""
+    with _yahoo_lock:
+        return dict(_sync_state)

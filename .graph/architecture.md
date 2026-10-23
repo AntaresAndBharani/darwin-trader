@@ -221,21 +221,27 @@ darwin-trader/
 │   ├── routes_account.py                         # Account connection, telemetry, positions, and Darwinex stats
 │   ├── routes_assets.py                          # Asset taxonomy, discovery, search, and specification routes
 │   ├── routes_strategy.py                        # Strategy start, pause, stop, kill-switch, and config routes
+│   ├── routes_yahoo.py                           # Yahoo Finance ticker CRUD, D1/W1/MN1 history, fundamentals & sync routes
 │   └── tests/                                    # Gateway integration and unit tests
 │       ├── conftest.py                           # Pytest fixtures, test client setup, and mock state
 │       ├── test_api.py                           # Endpoint test suite verifying HTTP & status behaviors
-│       └── test_assets.py                        # Asset discovery, category filtering, and contract spec tests
-├── strategy_engine/                              # Quantitative Strategy Engine & MT5 Integration
+│       ├── test_assets.py                        # Asset discovery, category filtering, and contract spec tests
+│       └── test_routes_yahoo.py                  # Yahoo Finance REST API contract & sync tests
+├── strategy_engine/                              # Quantitative Strategy Engine, MT5 & Yahoo Finance Integration
 │   ├── __init__.py                               # Package initialization
 │   ├── backtester.py                             # Bar-by-bar quantitative simulation engine
+│   ├── cli.py                                    # Unified CLI (sync-history, purge-history, committee, yahoo-migrate, yahoo-sync)
 │   ├── cli_history.py                            # CLI historical data sync and purge utilities
 │   ├── config.py                                 # Pydantic configuration model and environment loading
+│   ├── historical_db.py                          # Darwinex MT5 SQLite WAL historical rates storage (data/historical_rates.db)
 │   ├── models.py                                 # Core trading models, signals, positions, assets, enums
 │   ├── mt5_connector.py                          # MetaTrader 5 Win32 IPC connector & platform mock engine
-│   ├── requirements.txt                          # Strategy runtime dependencies (pandas, numpy, MetaTrader5)
+│   ├── requirements.txt                          # Strategy runtime dependencies (pandas, numpy, MetaTrader5, yahooquery, psycopg2-binary)
 │   ├── risk_manager.py                           # Darwinex Zero risk validation and dynamic lot sizing
 │   ├── sample_strategy.py                        # Reference quantitative strategy (EMA + RSI + ATR)
 │   ├── strategy_base.py                          # Abstract base strategy and vectorized indicator math
+│   ├── yahoo_db.py                               # Isolated Yahoo Finance SQLite WAL storage (data/yahoo_finance.db)
+│   ├── yahoo_fetcher.py                          # Yahoo Finance (yahooquery) OHLCV/metadata/valuation fetcher & PG migrator
 │   └── tests/                                    # Strategy, risk, connector, and governance test suites
 │       ├── test_assets_connector.py              # Thread-safe asset catalog and category filtering tests
 │       ├── test_cli_history.py                   # Parallel sync and granular purge tests
