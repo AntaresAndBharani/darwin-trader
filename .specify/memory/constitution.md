@@ -5,13 +5,13 @@
 ### I. Clean Architecture & Pure Quantitative Core
 Dependencies MUST point strictly inward from Presentation (`tui/`, `web/`, `api_gateway/`) through Data/Infrastructure (`mt5_connector.py`, `historical_db.py`, `yahoo_db.py`, `yahoo_fetcher.py`, `config.py`) to the Domain Core (`models.py`, `strategy_base.py`, `indicators.py`, `risk_manager.py`, `backtester.py`, `committee_calculator.py`).
 - Domain models, risk rules, and technical indicators MUST remain pure Python with zero imports of `FastAPI`, `Uvicorn`, `Textual`, or `MetaTrader5`.
-- Presentation clients (`tui/` and `web/`) MUST NOT instantiate broker/market-data SDKs (`MetaTrader5`, `yahooquery`) or query SQLite directly; all state transitions, market data queries, and telemetry MUST flow through the FastAPI Gateway (`/api/v1/*` and `/ws/live`).
-- Multi-timeframe indicator alignment (such as Weekly Heikin-Ashi to 4H bars or weekly/monthly OHLCV resampling) MUST enforce a strict zero-lookahead invariant so intra-period bars never observe unclosed higher-timeframe candles.
+- Presentation clients (`tui/` and `web/`) MUST NOT instantiate broker/market-data SDKs (`MetaTrader5`, `yahooquery`) or query SQLite directly; all state transitions, market data queries, strategy backtests, and telemetry MUST flow through the FastAPI Gateway (`/api/v1/*` and `/ws/live`).
+- Multi-timeframe indicator alignment (such as Weekly Heikin-Ashi aligned onto Daily bars or weekly/monthly OHLCV resampling) MUST enforce a strict zero-lookahead invariant so intra-period bars never observe unclosed higher-timeframe candles.
 - *Rationale*: Isolating quantitative math and domain invariants from transport and external data I/O guarantees deterministic backtesting, zero lookahead bias, and effortless UI portability.
 
 ### II. Darwinex Zero Risk & Capital Preservation (NON-NEGOTIABLE)
-Every trade signal and portfolio action MUST comply with Darwinex Zero institutional evaluation guardrails before reaching the execution layer.
-- No strategy signal may execute without passing `RiskManager.validate_signal()`, enforcing hard daily floating drawdown caps (`max_daily_drawdown_pct = 3.0%`), warning buffers (`drawdown_warning_pct = 2.5%`), maximum open position limits, and minimum free margin reserves (`>= 5%` of balance).
+Every live/broker trade signal and portfolio action MUST comply with Darwinex Zero institutional evaluation guardrails before reaching the MT5 execution layer.
+- No live strategy signal may execute without passing `RiskManager.validate_signal()`, enforcing hard daily floating drawdown caps (`max_daily_drawdown_pct = 3.0%`), warning buffers (`drawdown_warning_pct = 2.5%`), maximum open position limits, and minimum free margin reserves (`>= 5%` of balance).
 - Position queries, margin checks, drawdown calculations, and Emergency Kill-Switch liquidations MUST include all open positions across all symbols, including discretionary/manual trades (`magic == 0`).
 - Client UIs MUST safeguard the Emergency Kill Switch with explicit confirmation when open positions exist, and pause the strategy without dispatching redundant order liquidations when zero positions are open.
 - *Rationale*: Darwinex Zero enforces an uncompromising 3.0% daily drawdown boundary; bypassing pre-trade risk validation or ignoring manual positions risks immediate account disqualification.
@@ -21,8 +21,8 @@ The Terminal UI (`tui/`) and Web UI (`web/`) are first-class clients of the Fast
 - Starting either client (`.\scripts\run-tui.ps1`, `.\scripts\run-web.ps1`, or `npm run web` / `npm run dev`) MUST automatically verify whether the FastAPI Gateway (`127.0.0.1:8000`) is online, spawn it in the background if not running, and cleanly terminate any self-spawned gateway process upon exit.
 - On startup, the system MUST automatically connect to the configured live Darwinex MT5 environment (Account `4000073238`, Server `Darwinex-Live`, `mock_mode: false`) via passwordless Win32 IPC attachment to the running `terminal64.exe` instance, without blocking the operator behind a manual connection modal.
 - Manual connection dialogs (`ConnectModal` in both TUI and Web) MUST share identical pinned defaults (`Login = 4000073238`, `Server = Darwinex-Live`, `Terminal Path = C:\Program Files\Darwinex MetaTrader 5\terminal64.exe`, optional password for IPC attach, and `Mock Mode = false`).
-- Web-specific multi-tab workspaces (such as top-level `Darwinex MT5` and `Yahoo Finance` tabs in `web/`) may introduce rich graphical views and retire unused web placeholders (such as the legacy `StrategySidebar`) without breaking TUI workflows.
-- *Rationale*: Operators require a single-command launch experience (`start server and start working`) free of repetitive credential entry, while enabling rapid iteration on rich web visualization workspaces.
+- Web-specific multi-tab workspaces (`Darwinex MT5`, `Yahoo Finance`, and `Strategy Lifecycle` in `web/`) MUST promote the Strategy Lifecycle experience to a dedicated full-screen workspace and remove the legacy `StrategySidebar` card from the Darwinex MT5 dashboard without breaking TUI workflows.
+- *Rationale*: Operators require a single-command launch experience (`start server and start working`) free of repetitive credential entry, while enabling rapid iteration on rich full-screen web visualization and strategy evaluation workspaces.
 
 ### IV. Test-First & Platform-Independent Simulation (NON-NEGOTIABLE)
 All backend, quantitative, TUI, and Web features MUST be verified by automated tests capable of running deterministically on headless CI runners without a physical Windows MetaTrader 5 installation or live external network dependencies.
@@ -39,10 +39,11 @@ All shared runtime state, SQLite storage, and external I/O calls MUST be synchro
 - *Rationale*: Concurrent 1Hz WebSocket telemetry, multi-worker historical ingestion, and UI polling will corrupt state or leak Windows file handles (`WinError 32`) without strict lock and resource discipline.
 
 ### VI. Multi-Provider Data Isolation & Self-Contained Storage
-Darwin Trader MUST support both broker-specific CFD telemetry (Darwinex MT5) and real-exchange historical price, metadata, and fundamental datasets (Yahoo Finance) in isolated, zero-server local databases.
+Darwin Trader MUST support both broker-specific CFD telemetry (Darwinex MT5) and real-exchange historical price, metadata, fundamental datasets, and strategy backtesting (Yahoo Finance) in isolated, zero-server local databases.
 - Darwinex MT5 historical bars MUST reside in `data/historical_rates.db` (`HistoricalRatesDB`), while Yahoo Finance tickers, daily OHLCV + quarterly earnings (`stock_prices`), and quarterly valuation multiples (`valuation_history`) MUST reside in a dedicated `data/yahoo_finance.db` (`YahooFinanceDB`).
+- Strategy evaluations and historical backtests executed from the Web Strategy Lifecycle Control Panel MUST run strictly against Yahoo Finance data (`YahooFinanceDB`, supporting `D1`, `W1`, and `MN1` resampled series across single-asset or multi-asset/sector selections) and MUST NEVER query or mutate Darwinex Zero MT5 data or live broker positions.
 - Runtime operation of Darwin Trader MUST NOT require an external PostgreSQL or Docker database server; external databases (such as legacy `fractanomicsdb`) are used strictly as one-time or on-demand migration sources into `data/yahoo_finance.db`.
-- *Rationale*: Separating the multi-gigabyte MT5 tick/bar cache from Yahoo Finance exchange and fundamental tables prevents SQLite write-lock contention, preserves schema clarity, and guarantees zero-dependency local execution.
+- *Rationale*: Separating the multi-gigabyte MT5 tick/bar cache from Yahoo Finance exchange, fundamental, and strategy backtest datasets prevents SQLite write-lock contention, guarantees provider isolation, and ensures zero-dependency local execution.
 
 ## Architectural & Stack Constraints
 
@@ -71,4 +72,4 @@ This Constitution is the supreme engineering governance document for Darwin Trad
   - `PATCH`: Wording clarifications, typo fixes, or non-semantic refinements.
 - **Compliance Review**: Every specification (`/speckit-specify`), implementation plan (`/speckit-plan`), task breakdown (`/speckit-tasks`), and code review MUST verify compliance with the 6 Core Principles defined herein.
 
-**Version**: 1.2.0 | **Ratified**: 2026-10-22 | **Last Amended**: 2026-10-23
+**Version**: 1.3.0 | **Ratified**: 2026-10-22 | **Last Amended**: 2026-10-23

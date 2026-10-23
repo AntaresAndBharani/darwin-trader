@@ -73,57 +73,110 @@ class DarwinXZeroTraderStrategy(BaseStrategy):
                 reason="Insufficient weekly history for Heikin-Ashi lookback",
             )
 
-        # 2. Moving Average indicator resolution
-        sma_200 = curr.get("sma_200") if "sma_200" in curr else (curr.get("200 SMA") if "200 SMA" in curr else None)
-        sma_100 = curr.get("sma_100") if "sma_100" in curr else (curr.get("100 SMA") if "100 SMA" in curr else None)
-        sma_50 = curr.get("sma_50") if "sma_50" in curr else (curr.get("50 SMA") if "50 SMA" in curr else None)
-        ema_21 = curr.get("ema_21") if "ema_21" in curr else (curr.get("21 EMA") if "21 EMA" in curr else None)
+        # 2. Moving Average indicator resolution (supports custom periods from StrategyConfig)
+        slow_p = int(getattr(self.config, "sma_slow_period", 200) or 200)
+        mid_p = int(getattr(self.config, "sma_mid_period", 100) or 100)
+        fast_p = int(getattr(self.config, "sma_fast_period", 50) or 50)
+        ema_p = int(getattr(self.config, "ema_period", 21) or 21)
+
+        sma_200 = (
+            curr.get("_ma_slow")
+            if "_ma_slow" in curr
+            else (
+                (
+                    curr.get("sma_200")
+                    if "sma_200" in curr
+                    else (curr.get("200 SMA") if "200 SMA" in curr else None)
+                )
+                if slow_p == 200
+                else None
+            )
+        )
+        sma_100 = (
+            curr.get("_ma_mid")
+            if "_ma_mid" in curr
+            else (
+                (
+                    curr.get("sma_100")
+                    if "sma_100" in curr
+                    else (curr.get("100 SMA") if "100 SMA" in curr else None)
+                )
+                if mid_p == 100
+                else None
+            )
+        )
+        sma_50 = (
+            curr.get("_ma_fast")
+            if "_ma_fast" in curr
+            else (
+                (
+                    curr.get("sma_50")
+                    if "sma_50" in curr
+                    else (curr.get("50 SMA") if "50 SMA" in curr else None)
+                )
+                if fast_p == 50
+                else None
+            )
+        )
+        ema_21 = (
+            curr.get("_ma_ema")
+            if "_ma_ema" in curr
+            else (
+                (
+                    curr.get("ema_21")
+                    if "ema_21" in curr
+                    else (curr.get("21 EMA") if "21 EMA" in curr else None)
+                )
+                if ema_p == 21
+                else None
+            )
+        )
 
         if sma_200 is None:
-            if len(df) < 200:
+            if len(df) < slow_p:
                 return TradeSignal(
                     symbol=symbol,
                     signal_type=SignalType.HOLD,
                     price=current_close,
                     reason="Insufficient history for Moving Average warm-up",
                 )
-            sma_200 = float(compute_sma(df["close"], 200).iloc[-1])
+            sma_200 = float(compute_sma(df["close"], slow_p).iloc[-1])
         else:
             sma_200 = float(sma_200)
 
         if sma_100 is None:
-            if len(df) < 100:
+            if len(df) < mid_p:
                 return TradeSignal(
                     symbol=symbol,
                     signal_type=SignalType.HOLD,
                     price=current_close,
                     reason="Insufficient history for Moving Average warm-up",
                 )
-            sma_100 = float(compute_sma(df["close"], 100).iloc[-1])
+            sma_100 = float(compute_sma(df["close"], mid_p).iloc[-1])
         else:
             sma_100 = float(sma_100)
 
         if sma_50 is None:
-            if len(df) < 50:
+            if len(df) < fast_p:
                 return TradeSignal(
                     symbol=symbol,
                     signal_type=SignalType.HOLD,
                     price=current_close,
                     reason="Insufficient history for Moving Average warm-up",
                 )
-            sma_50 = float(compute_sma(df["close"], 50).iloc[-1])
+            sma_50 = float(compute_sma(df["close"], fast_p).iloc[-1])
         else:
             sma_50 = float(sma_50)
 
         if ema_21 is None:
-            if len(df) < 21:
+            if len(df) < ema_p:
                 return TradeSignal(
                     symbol=symbol,
                     signal_type=SignalType.HOLD,
                     price=current_close,
                     reason="Insufficient history for Moving Average warm-up",
                 )
-            ema_21 = float(compute_ema(df["close"], 21).iloc[-1])
+            ema_21 = float(compute_ema(df["close"], ema_p).iloc[-1])
         else:
             ema_21 = float(ema_21)
 
@@ -175,15 +228,20 @@ class DarwinXZeroTraderStrategy(BaseStrategy):
                 reason="Quad-MA stack criteria failed: 100 SMA <= 200 SMA",
             )
 
-        # 5. Nominal Entry Signal (10 units, SL -10%, TP1 +5%, 50% fraction)
+        # 5. Nominal Entry Signal (configurable SL %, TP1 %, partial fraction, and units)
+        sl_pct = float(getattr(self.config, "stop_loss_pct", 10.0) or 10.0)
+        tp1_pct = float(getattr(self.config, "partial_tp_pct", 5.0) or 5.0)
+        part_frac = float(getattr(self.config, "partial_fraction", 0.5) or 0.5)
+        units_val = float(getattr(self.config, "default_units", 10.0) or 10.0)
+
         return TradeSignal(
             symbol=symbol,
             signal_type=SignalType.ENTER_LONG,
             price=current_close,
-            stop_loss=current_close * 0.90,
-            units=10.0,
-            partial_take_profit=current_close * 1.05,
-            partial_fraction=0.5,
+            stop_loss=current_close * (1.0 - sl_pct / 100.0),
+            units=units_val,
+            partial_take_profit=current_close * (1.0 + tp1_pct / 100.0),
+            partial_fraction=part_frac,
             reason="DarwinX entry criteria met",
         )
 
@@ -199,14 +257,29 @@ class DarwinXZeroTraderStrategy(BaseStrategy):
             curr = sub_df.iloc[-1]
             ha_color = curr.get("w1_ha_color_prev1") if "w1_ha_color_prev1" in curr else curr.get("ha_color_prev1")
             close_val = float(curr["close"])
-            sma_200 = curr.get("sma_200") if "sma_200" in curr else (curr.get("200 SMA") if "200 SMA" in curr else None)
+            slow_p = int(getattr(self.config, "sma_slow_period", 200) or 200)
+            sma_200 = (
+                curr.get("_ma_slow")
+                if "_ma_slow" in curr
+                else (
+                    (
+                        curr.get("sma_200")
+                        if "sma_200" in curr
+                        else (curr.get("200 SMA") if "200 SMA" in curr else None)
+                    )
+                    if slow_p == 200
+                    else None
+                )
+            )
             if sma_200 is None:
-                if len(sub_df) >= 200:
-                    sma_200 = float(compute_sma(sub_df["close"], 200).iloc[-1])
+                if len(sub_df) >= slow_p:
+                    sma_200 = float(compute_sma(sub_df["close"], slow_p).iloc[-1])
                 else:
                     return None
             else:
                 sma_200 = float(sma_200)
+                if pd.isna(sma_200):
+                    return None
 
             if str(ha_color).upper() == "RED" and close_val < sma_200:
                 return SignalType.EXIT_LONG
