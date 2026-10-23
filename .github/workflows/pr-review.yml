@@ -185,15 +185,15 @@ jobs:
 
           VERDICT=$(jq -r '.verdict // "CHANGES_REQUESTED"' /tmp/pr_review_output.json)
           if [ "$VERDICT" = "APPROVED" ]; then
-            echo "Verdict is APPROVED. Waiting for Build APK & CI checks to pass before merging..."
+            echo "Verdict is APPROVED. Waiting for CI checks to pass before merging..."
             sleep 8
             for i in $(seq 1 30); do
-              BUILD_STATUS=$(gh run list -R "$REPO" -b "$HEAD_REF" -w "Build APK & CI" -L 1 --json status,conclusion -q '.[0] | "\(.status):\(.conclusion)"' || echo "")
-              echo "Build APK & CI status ($i/30): $BUILD_STATUS"
+              BUILD_STATUS=$(gh run list -R "$REPO" -b "$HEAD_REF" -w "CI" -L 1 --json status,conclusion -q '.[0] | "\(.status):\(.conclusion)"' || echo "")
+              echo "CI status ($i/30): $BUILD_STATUS"
               if [ "$BUILD_STATUS" = "completed:success" ]; then
                 break
               elif [ "$BUILD_STATUS" = "completed:failure" ] || [ "$BUILD_STATUS" = "completed:cancelled" ]; then
-                echo "Build APK & CI failed ($BUILD_STATUS). Aborting auto-merge."
+                echo "CI failed ($BUILD_STATUS). Aborting auto-merge."
                 exit 1
               fi
               sleep 10

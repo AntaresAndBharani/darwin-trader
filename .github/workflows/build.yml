@@ -1,4 +1,4 @@
-name: Build APK & CI
+name: CI
 
 on:
   push:
@@ -58,4 +58,3 @@ jobs:
       - name: Build Frontend SPA
         working-directory: web
         run: npm run build
-
