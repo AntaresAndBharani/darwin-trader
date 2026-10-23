@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Interactive Claude Code GitHub App Workflow (.github/workflows/claude.yml)**:
+  - Added .github/workflows/claude.yml using nthropics/claude-code-action@v1 with org-level CLAUDE_CODE_OAUTH_TOKEN authentication so @claude mentions in Issues, Pull Requests, and PR Review Comments trigger interactive Claude Code sessions on GitHub.com.
+
 - **Unified Web & TUI Startup, Auto-Connect, and ConnectModal Parity (`001-web-tui-parity`)**:
   - Ratified project engineering governance in `.specify/memory/constitution.md` (`v1.0.0`) establishing Clean Architecture, Darwinex Zero Risk Guardrails, Multi-Client TUI/Web Parity, Test-First Simulation, and Concurrency Lock Discipline.
   - Implemented `darwinGatewayPlugin` in `web/vite.config.ts` and created `scripts/run-web.ps1` (mirroring `scripts/run-tui.ps1`) so running `npm run web`, `npm run dev`, or `.\scripts\run-web.ps1` automatically checks/starts the FastAPI Gateway on `127.0.0.1:8000`, auto-connects to Account `4000073238` on `Darwinex-Live` (`mock_mode: false`), and cleanly stops any self-spawned Gateway process on exit.
