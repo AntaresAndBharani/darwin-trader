@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Yahoo Finance Strategy Lifecycle & Backtesting Control Panel (`004-yahoo-strategy-lifecycle`)**:
+  - Created `strategy_engine/yahoo_backtester.py` providing dynamic strategy parameter catalog discovery (`get_yahoo_strategies_catalog`), strict parameter validation (`validate_and_build_strategy_config`), zero-lookahead Weekly (`W1`) Heikin-Ashi alignment (`enrich_weekly_heikin_ashi`), single-asset mark-to-market (`MTM`) historical backtesting (`run_single_asset_yahoo_backtest`), and multi-asset/sector portfolio backtesting (`run_yahoo_portfolio_backtest`) with forward-filled equity curve alignment (`ffill().fillna(capital_k)`).
+  - Parameterized `DarwinXZeroTraderStrategy` (`strategy_engine/strategies/darwinx_zero_trader.py`) and `StrategyConfig` (`strategy_engine/config.py`) to support runtime overrides for Quad-MA periods (`ema_period`, `sma_fast_period`, `sma_mid_period`, `sma_slow_period`) and 3-stage lifecycle parameters (`stop_loss_pct`, `partial_tp_pct`, `partial_fraction`).
+  - Extended `YahooFinanceDB` (`strategy_engine/yahoo_db.py`) with `get_price_history_range(symbol, timeframe, from_date, to_date, warmup_bars)` supporting indicator warm-up pre-loading and resampled `D1`/`W1`/`MN1` bars exclusively from `data/yahoo_finance.db`.
+  - Added FastAPI endpoints `GET /api/v1/yahoo/strategies` and `POST /api/v1/yahoo/strategies/backtest` in `api_gateway/routes_yahoo.py` with Pydantic v2 validation (`initial_balance > 0`, `0.5 <= risk_per_trade_pct <= 100.0`, `timeframe` in `D1`/`W1`/`MN1`).
+  - Built full-screen `StrategyLifecycleWorkspace` (`web/src/components/StrategyLifecycleWorkspace.tsx`) and promoted Strategy Lifecycle to a top-level workspace tab in `web/src/App.tsx` (alongside `Darwinex MT5` and `Yahoo Finance`, removing the legacy `StrategySidebar` from the Darwinex MT5 tab), complete with Single/Multi-Asset & Sector selector, dynamic strategy parameter editor, Reset to Defaults, KPI Summary Cards, `lightweight-charts` Equity Curve vs Price & Trade Markers toggle, clickable Multi-Asset Comparison Table drill-down, and Trade Execution Log.
+  - Added comprehensive unit and integration test suites in `strategy_engine/tests/test_yahoo_backtester.py`, `api_gateway/tests/test_routes_yahoo.py`, `web/src/api/yahoo.test.ts`, `web/src/components/StrategyLifecycleWorkspace.test.tsx`, and `web/src/App.test.tsx`.
+
 ### Fixed
 - **Automated PR Review Auto-Merge, Self-Cancellation Prevention & Self-Healing Label Governance (`003-pr-review-automerge`)**:
   - Updated `.github/workflows/pr-review.yml` to set `cancel-in-progress: false` on the per-PR concurrency group so pushing an `[skip pr-review]` auto-fix commit with `ORCHESTRATION_PAT` queues behind the active workflow run instead of cancelling it mid-merge.

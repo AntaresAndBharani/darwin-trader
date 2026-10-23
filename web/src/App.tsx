@@ -1,7 +1,6 @@
 import { FC, useState, useEffect, useRef } from 'react';
 import { StatusRibbon } from './components/StatusRibbon';
 import { PositionsGrid } from './components/PositionsGrid';
-import { StrategySidebar } from './components/StrategySidebar';
 import {
   ConnectModal,
   DEFAULT_LOGIN,
@@ -9,11 +8,16 @@ import {
   DEFAULT_TERMINAL_PATH,
 } from './components/ConnectModal';
 import { ChartWorkspace } from './components/ChartWorkspace';
+import { YahooWorkspace } from './components/YahooWorkspace';
+import { StrategyLifecycleWorkspace } from './components/StrategyLifecycleWorkspace';
 import { api } from './api/client';
 import { accountApi } from './api/account';
 
+export type WorkspaceTab = 'darwinex' | 'yahoo' | 'strategy';
+
 export const App: FC = () => {
   const [isConnectOpen, setIsConnectOpen] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('darwinex');
   const autoConnectAttemptedRef = useRef<boolean>(false);
 
   // Automatically attach to Darwinex-Live (4000073238) on mount if Gateway is still in default state
@@ -56,69 +60,120 @@ export const App: FC = () => {
 
       {/* Main Workspace Area */}
       <main className="flex-1 p-6 max-w-7xl mx-auto w-full flex flex-col gap-6">
-        <header className="flex items-center justify-between border-b border-zinc-800 pb-4">
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800 pb-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
               <span className="text-emerald-400">Darwin Trader</span>
-              <span className="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">v1.0.0</span>
+              <span className="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono">
+                v1.0.0
+              </span>
             </h1>
             <p className="text-xs text-zinc-400 mt-1">
-              Visual Algorithmic Trading Platform &middot; Hardware-accelerated TradingView &amp; MetaTrader 5 Bridge
+              Visual Algorithmic Trading Platform &middot; Hardware-accelerated TradingView &amp;
+              MetaTrader 5 / Yahoo Finance Bridge
             </p>
           </div>
-          <button
-            type="button"
-            data-testid="header-connect-btn"
-            onClick={() => setIsConnectOpen(true)}
-            className="px-3.5 py-1.5 text-xs font-semibold rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition-colors flex items-center gap-1.5 cursor-pointer"
-          >
-            <span>Connect MT5...</span>
-          </button>
+
+          <div className="flex items-center gap-3">
+            {/* Top-Level Workspace Navigation Tabs */}
+            <nav
+              data-testid="workspace-tabs"
+              className="flex items-center bg-zinc-900 border border-zinc-800 rounded-lg p-1 gap-1"
+            >
+              <button
+                type="button"
+                data-testid="tab-darwinex"
+                onClick={() => setActiveTab('darwinex')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors cursor-pointer ${
+                  activeTab === 'darwinex'
+                    ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-700/70'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Darwinex MT5
+              </button>
+              <button
+                type="button"
+                data-testid="tab-yahoo"
+                onClick={() => setActiveTab('yahoo')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors cursor-pointer ${
+                  activeTab === 'yahoo'
+                    ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-700/70'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Yahoo Finance
+              </button>
+              <button
+                type="button"
+                data-testid="tab-strategy"
+                onClick={() => setActiveTab('strategy')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors cursor-pointer ${
+                  activeTab === 'strategy'
+                    ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-700/70'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Strategy Lifecycle
+              </button>
+            </nav>
+
+            <button
+              type="button"
+              data-testid="header-connect-btn"
+              onClick={() => setIsConnectOpen(true)}
+              className="px-3.5 py-1.5 text-xs font-semibold rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition-colors flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>Connect MT5...</span>
+            </button>
+          </div>
         </header>
 
-        {/* Dashboard overview container */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-5">
-            <h2 className="text-sm font-semibold text-zinc-300">Live Gateway Telemetry</h2>
-            <p className="text-xs text-zinc-400 mt-1">
-              Real-time WebSocket streaming at 1Hz from <code className="text-emerald-400">/ws/live</code>.
-            </p>
-          </div>
-          <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-5">
-            <h2 className="text-sm font-semibold text-zinc-300">Strategy Engine</h2>
-            <p className="text-xs text-zinc-400 mt-1">
-              Connected via decoupled FastAPI bridge with zero MT5 core modifications.
-            </p>
-          </div>
-          <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-5">
-            <h2 className="text-sm font-semibold text-zinc-300">TradingView Canvas</h2>
-            <p className="text-xs text-zinc-400 mt-1">
-              Institutional microstructure metrics &amp; client-side Heikin-Ashi transform engine.
-            </p>
-          </div>
-        </div>
+        {activeTab === 'darwinex' && (
+          <>
+            {/* Dashboard overview container */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-5">
+                <h2 className="text-sm font-semibold text-zinc-300">Live Gateway Telemetry</h2>
+                <p className="text-xs text-zinc-400 mt-1">
+                  Real-time WebSocket streaming at 1Hz from{' '}
+                  <code className="text-emerald-400">/ws/live</code>.
+                </p>
+              </div>
+              <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-5">
+                <h2 className="text-sm font-semibold text-zinc-300">Strategy Engine</h2>
+                <p className="text-xs text-zinc-400 mt-1">
+                  Connected via decoupled FastAPI bridge with zero MT5 core modifications.
+                </p>
+              </div>
+              <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-5">
+                <h2 className="text-sm font-semibold text-zinc-300">TradingView Canvas</h2>
+                <p className="text-xs text-zinc-400 mt-1">
+                  Institutional microstructure metrics &amp; client-side Heikin-Ashi transform
+                  engine.
+                </p>
+              </div>
+            </div>
 
-        {/* TradingView Chart Workspace */}
-        <section>
-          <ChartWorkspace />
-        </section>
+            {/* TradingView Chart Workspace */}
+            <section>
+              <ChartWorkspace />
+            </section>
 
-        {/* Workspace Layout: Positions Grid + Strategy Lifecycle Sidebar */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-          <div className="lg:col-span-2">
-            <PositionsGrid />
-          </div>
-          <div className="lg:col-span-1">
-            <StrategySidebar onOpenConnect={() => setIsConnectOpen(true)} />
-          </div>
-        </div>
+            {/* Full-Width Positions Grid (Strategy Lifecycle promoted to dedicated top-level tab) */}
+            <div className="w-full">
+              <PositionsGrid />
+            </div>
+          </>
+        )}
+
+        {activeTab === 'yahoo' && <YahooWorkspace />}
+
+        {activeTab === 'strategy' && <StrategyLifecycleWorkspace />}
       </main>
 
       {/* MetaTrader 5 Connect Modal */}
-      <ConnectModal
-        isOpen={isConnectOpen}
-        onClose={() => setIsConnectOpen(false)}
-      />
+      <ConnectModal isOpen={isConnectOpen} onClose={() => setIsConnectOpen(false)} />
     </div>
   );
 };

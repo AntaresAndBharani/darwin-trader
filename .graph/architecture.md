@@ -415,6 +415,14 @@ To eliminate visual flicker and preserve row selection state in terminal dashboa
 - Retains stale cache when the gateway is unreachable (`ACTIVE POSITIONS [STALE / OFFLINE CACHE]`), preventing blank screens during brief connection hiccups.
 - Implements automatic responsive collapsing: collapses horizontal summary cards into a 2x2 grid when the viewport falls below 80 columns or 24 rows.
 
+
+### 9. Yahoo Finance Strategy Lifecycle & Portfolio Backtesting Pattern (`004-yahoo-strategy-lifecycle`)
+
+The Web client's **Strategy Lifecycle** tab (`web/src/components/StrategyLifecycleWorkspace.tsx`) and FastAPI Yahoo routes (`api_gateway/routes_yahoo.py` -> `strategy_engine/yahoo_backtester.py`) provide an isolated historical backtesting workbench:
+- **Strict Provider Isolation**: Executes `darwin_trend` (`DarwinTrendStrategy`) and `darwinx_zero_trader` (`DarwinXZeroTraderStrategy`) exclusively against `YahooFinanceDB` (`data/yahoo_finance.db`) across `D1`, `W1`, and `MN1` timeframes without querying or mutating Darwinex Zero MT5 data.
+- **Zero-Lookahead Weekly Heikin-Ashi Enrichment**: Pre-computes Weekly (`W1`) Heikin-Ashi bars with synthetic availability close timestamps (`w1_close_time = w1_open + 7d`) and backward `pd.merge_asof` onto execution bars, guaranteeing zero lookahead bias.
+- **Mark-to-Market (MTM) Accounting & Forward-Filled Portfolio Aggregation**: Tracks per-bar MTM equity (`balance + unrealized_pnl`), logs terminal open positions as `OPEN_AT_END (MTM)` so `final_equity == initial_balance + realized_pnl + unrealized_pnl`, and aggregates multi-asset/sector portfolios over the union date index with `ffill().fillna(capital_k)`.
+
 ---
 
 ## Architectural Constraints & Anti-Patterns

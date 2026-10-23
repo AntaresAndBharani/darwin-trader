@@ -16,6 +16,11 @@ export const mockSeries = {
   applyOptions: vi.fn(),
 };
 
+export const mockSeriesMarkers = {
+  setMarkers: vi.fn(),
+  markers: vi.fn(() => []),
+};
+
 export const mockTimeScale = {
   fitContent: vi.fn(),
   scrollToPosition: vi.fn(),
@@ -33,5 +38,8 @@ export const mockChart = {
 vi.mock('lightweight-charts', () => ({
   createChart: vi.fn(() => mockChart),
   CandlestickSeries: { type: 'Candlestick' },
+  AreaSeries: { type: 'Area' },
+  LineSeries: { type: 'Line' },
+  createSeriesMarkers: vi.fn(() => mockSeriesMarkers),
   ColorType: { Solid: 'solid', VerticalGradient: 'gradient' },
 }));

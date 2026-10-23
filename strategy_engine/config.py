@@ -15,7 +15,7 @@ class StrategyConfig(BaseModel):
     # Execution Mode: True = Simulated/Mock execution, False = Live MT5 execution
     mock_mode: bool = Field(default_factory=lambda: os.getenv("MOCK_MODE", "true").lower() in ("true", "1", "yes"))
     
-    # Strategy Indicator Parameters
+    # Strategy Indicator Parameters (Darwin Trend ATR)
     fast_ema_period: int = 12
     slow_ema_period: int = 26
     rsi_period: int = 14
@@ -23,6 +23,16 @@ class StrategyConfig(BaseModel):
     rsi_oversold: float = 30.0
     atr_period: int = 14
     atr_multiplier: float = 2.0  # SL = ATR * Multiplier
+
+    # DarwinX Zero Trader Quad-MA & 3-Stage Parameters
+    ema_period: int = 21
+    sma_fast_period: int = 50
+    sma_mid_period: int = 100
+    sma_slow_period: int = 200
+    stop_loss_pct: float = 10.0
+    partial_tp_pct: float = 5.0
+    partial_fraction: float = 0.5
+    default_units: float = 10.0
     
     # Position & Risk Management (Darwinex Zero Focused)
     risk_per_trade_pct: float = 1.0     # 1% per trade
