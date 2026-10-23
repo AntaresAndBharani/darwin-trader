@@ -31,6 +31,11 @@ from strategy_engine.models import (
     CommitteeContext,
 )
 from strategy_engine.mt5_connector import MT5Connector
+from strategy_engine.yahoo_db import YahooFinanceDB
+from strategy_engine.yahoo_fetcher import (
+    migrate_postgres_to_sqlite,
+    sync_yahoo_tickers,
+)
 
 logger = logging.getLogger("strategy_engine")
 
@@ -466,6 +471,121 @@ def handle_purge_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_yahoo_migrate(args: argparse.Namespace) -> int:
+    """Migrates legacy PostgreSQL fractanomicsdb data into local YahooFinanceDB."""
+    db_path = getattr(args, "db_path", None)
+    db = YahooFinanceDB(db_path=db_path) if db_path else YahooFinanceDB()
+
+    pg_host = getattr(args, "pg_host", "localhost") or "localhost"
+    pg_port = int(getattr(args, "pg_port", 5433) or 5433)
+    pg_db = getattr(args, "pg_db", "fractanomicsdb") or "fractanomicsdb"
+    pg_user = getattr(args, "pg_user", "postgres") or "postgres"
+    pg_pass = getattr(args, "pg_pass", "postgres") or "postgres"
+
+    logger.info(
+        "Migrating Yahoo Finance dataset from PostgreSQL (%s:%d/%s) to %s...",
+        pg_host,
+        pg_port,
+        pg_db,
+        db.db_path,
+    )
+
+    def _on_progress(stage: str = "", count: int = 0, **_kwargs):
+        logger.info("Migration progress [%s]: %d rows upserted", stage, count)
+
+    try:
+        summary = migrate_postgres_to_sqlite(
+            db=db,
+            pg_host=pg_host,
+            pg_port=pg_port,
+            pg_db=pg_db,
+            pg_user=pg_user,
+            pg_pass=pg_pass,
+            progress_callback=_on_progress,
+        )
+    except Exception as exc:
+        print(f"Error: Yahoo Finance PostgreSQL migration failed: {exc}")
+        return 1
+
+    print(
+        f"Yahoo Finance migration complete: {summary['tickers']} tickers, "
+        f"{summary['stock_prices']} stock_prices, "
+        f"{summary['valuation_history']} valuation_history rows."
+    )
+    return 0
+
+
+def handle_yahoo_sync(args: argparse.Namespace) -> int:
+    """Synchronizes Yahoo Finance OHLCV, metadata, and valuation multiples into YahooFinanceDB."""
+    workers = getattr(args, "workers", 5)
+    if workers is None:
+        workers = 5
+    if not isinstance(workers, int) or workers < 1 or workers > 50:
+        print(f"Error: --workers must be an integer between 1 and 50 (got {workers}).")
+        return 1
+
+    raw_symbol = getattr(args, "symbol", None)
+    symbols: Optional[List[str]] = None
+    if raw_symbol is not None:
+        symbols = parse_symbols(raw_symbol)
+        if not symbols:
+            print("Error: No valid symbols provided.")
+            return 1
+
+    db_path = getattr(args, "db_path", None)
+    db = YahooFinanceDB(db_path=db_path) if db_path else YahooFinanceDB()
+
+    include_fundamentals = bool(getattr(args, "include_fundamentals", True))
+    include_valuation = bool(getattr(args, "include_valuation", True))
+    include_metadata = bool(getattr(args, "include_metadata", True))
+    start_date = getattr(args, "start_date", None)
+    end_date = getattr(args, "end_date", None)
+
+    logger.info(
+        "Synchronizing Yahoo Finance data [symbols=%s, workers=%d, fundamentals=%s, valuation=%s, metadata=%s]...",
+        ",".join(symbols) if symbols else "ALL_ACTIVE",
+        workers,
+        include_fundamentals,
+        include_valuation,
+        include_metadata,
+    )
+
+    try:
+        summary = sync_yahoo_tickers(
+            db=db,
+            symbols=symbols,
+            include_fundamentals=include_fundamentals,
+            include_valuation=include_valuation,
+            include_metadata=include_metadata,
+            start_date=start_date,
+            end_date=end_date,
+            workers=workers,
+        )
+    except Exception as exc:
+        print(f"Error: Yahoo Finance sync failed: {exc}")
+        return 1
+
+    total = summary["total_symbols"]
+    completed = summary["completed_symbols"]
+    failed = summary["failed_symbols"]
+    if total > 0 and completed == 0 and len(failed) > 0:
+        print(f"Error: Yahoo sync failed (0/{total}). Failed symbols: {', '.join(failed)}")
+        return 1
+    elif len(failed) > 0:
+        print(
+            f"Warning: Partial Yahoo sync completed ({completed}/{total}). "
+            f"Failed symbols: {', '.join(failed)}"
+        )
+        return 2
+
+    print(
+        f"Yahoo sync finished: {completed}/{total} symbols completed, "
+        f"{summary['upserted_prices']} price bars, "
+        f"{summary['upserted_valuations']} valuation rows."
+    )
+    return 0
+
+
 def main(argv: Optional[List[str]] = None, force_terminal: Optional[bool] = None) -> int:
     """CLI main entry point for Strategy Engine commands."""
     parent_parser = argparse.ArgumentParser(add_help=False)
@@ -655,6 +775,121 @@ def main(argv: Optional[List[str]] = None, force_terminal: Optional[bool] = None
         help="Custom SQLite database file path (optional)",
     )
 
+    yahoo_migrate_parser = subparsers.add_parser(
+        "yahoo-migrate",
+        parents=[parent_parser],
+        help="Migrate Yahoo Finance dataset from PostgreSQL (fractanomicsdb) into local SQLite storage",
+    )
+    yahoo_migrate_parser.add_argument(
+        "--pg-host",
+        type=str,
+        default="localhost",
+        help="PostgreSQL host (default: localhost)",
+    )
+    yahoo_migrate_parser.add_argument(
+        "--pg-port",
+        type=int,
+        default=5433,
+        help="PostgreSQL port (default: 5433)",
+    )
+    yahoo_migrate_parser.add_argument(
+        "--pg-db",
+        type=str,
+        default="fractanomicsdb",
+        help="PostgreSQL database name (default: fractanomicsdb)",
+    )
+    yahoo_migrate_parser.add_argument(
+        "--pg-user",
+        type=str,
+        default="postgres",
+        help="PostgreSQL user (default: postgres)",
+    )
+    yahoo_migrate_parser.add_argument(
+        "--pg-pass",
+        type=str,
+        default="postgres",
+        help="PostgreSQL password (default: postgres)",
+    )
+    yahoo_migrate_parser.add_argument(
+        "--db-path",
+        type=str,
+        default=None,
+        help="Target Yahoo Finance SQLite database file path (optional)",
+    )
+
+    yahoo_sync_parser = subparsers.add_parser(
+        "yahoo-sync",
+        parents=[parent_parser],
+        help="Synchronize Yahoo Finance OHLCV, metadata, and valuation multiples into local SQLite storage",
+    )
+    yahoo_sync_parser.add_argument(
+        "--symbol",
+        type=str,
+        action="append",
+        default=None,
+        help="Target ticker symbol(s) (e.g. AAPL, LSE:SHEL or comma-separated AAPL,MSFT). Omit for all active.",
+    )
+    yahoo_sync_parser.add_argument(
+        "--include-fundamentals",
+        action="store_true",
+        default=True,
+        help="Include quarterly EPS and revenue when fetching OHLCV (default: True)",
+    )
+    yahoo_sync_parser.add_argument(
+        "--no-fundamentals",
+        dest="include_fundamentals",
+        action="store_false",
+        help="Skip quarterly EPS and revenue extraction",
+    )
+    yahoo_sync_parser.add_argument(
+        "--include-valuation",
+        action="store_true",
+        default=True,
+        help="Include quarterly valuation multiples (default: True)",
+    )
+    yahoo_sync_parser.add_argument(
+        "--no-valuation",
+        dest="include_valuation",
+        action="store_false",
+        help="Skip quarterly valuation multiples extraction",
+    )
+    yahoo_sync_parser.add_argument(
+        "--include-metadata",
+        action="store_true",
+        default=True,
+        help="Include company metadata (sector, industry, name) (default: True)",
+    )
+    yahoo_sync_parser.add_argument(
+        "--no-metadata",
+        dest="include_metadata",
+        action="store_false",
+        help="Skip company metadata extraction",
+    )
+    yahoo_sync_parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        help="Explicit start date YYYY-MM-DD (optional)",
+    )
+    yahoo_sync_parser.add_argument(
+        "--end-date",
+        type=str,
+        default=None,
+        help="Explicit end date YYYY-MM-DD (optional)",
+    )
+    yahoo_sync_parser.add_argument(
+        "--workers",
+        type=int,
+        default=5,
+        help="Concurrency limit (default: 5, range: 1-50)",
+    )
+    yahoo_sync_parser.add_argument(
+        "--db-path",
+        type=str,
+        default=None,
+        help="Target Yahoo Finance SQLite database file path (optional)",
+    )
+
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -688,6 +923,10 @@ def main(argv: Optional[List[str]] = None, force_terminal: Optional[bool] = None
         return handle_purge_history(args)
     elif args.command == "committee":
         return handle_committee(args)
+    elif args.command == "yahoo-migrate":
+        return handle_yahoo_migrate(args)
+    elif args.command == "yahoo-sync":
+        return handle_yahoo_sync(args)
 
     parser.print_help()
     return 1

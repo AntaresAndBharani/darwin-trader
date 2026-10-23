@@ -1,103 +1,214 @@
-# 📋 Implementation Plan & Specification: Web & TUI Startup, Auto-Connect, and ConnectModal Parity
+# Yahoo Finance Market Data Integration, PostgreSQL Migration & Web Explorer Workspace
 
-## 📝 Initial Draft Proposal (Operator Requisite)
+## 1. Problem Statement & Architectural Context
 
-> "The node application is requesting me data to connect to DarwinX Zero, but the TUI is doing it automatically. I want the same exact behaviour in both, and the TUI is the correct one. TUI is also executing the API at the same time is running. I just want to start the server and start working. Let analyze this."
+### 1.1 Background & Motivation
+Currently, `darwin-trader` sources historical OHLCV market data exclusively from the Darwinex Zero MetaTrader 5 (MT5) CFD bridge into `data/historical_rates.db`. While MT5 is ideal for live CFD account telemetry and position execution, its historical stock feed is limited in depth, lacks global exchange tickers outside Darwinex's CFD universe, and provides no fundamental or valuation metrics.
+
+Across sibling repositories in the workspace ([`stock-manager-cli`](file:///c:/Users/rogal/workspaces/ws-trading/stock-manager-cli/src/tradingtools_stock/core/fetcher.py), [`bl-stock-data-service`](file:///c:/Users/rogal/workspaces/ws-trading/bl-stock-data-service/stock_data_fetcher_function.py), and [`trading-manager`](file:///c:/Users/rogal/workspaces/ws-trading/trading-manager/backend/utils/market_data.py)), we already built a Yahoo Finance (`yahooquery`) pipeline and accumulated a rich dataset in PostgreSQL (`localhost:5433/fractanomicsdb`):
+- **`tickers` (1,011 rows):** Exchange/market prefixes (`NASDAQ`, `NYSE`, `BME`, `LSE`, `XETR`, etc.), company names, sectors, industries, and active status.
+- **`stock_prices` (1,313,580 rows):** Deep daily OHLCV bars plus historical `quarterly_eps` and `quarterly_revenue`.
+- **`valuation_history` (12,374 rows):** Quarterly valuation multiples (`trailing_pe`, `forward_pe`, `pb`, `ps`, `peg`, `ev_ebitda`, `ev_revenue`, `market_cap`, `enterprise_value`, `dividend_yield`).
+
+Additionally, the current Web Dashboard ([`web/src/App.tsx`](file:///c:/Users/rogal/workspaces/ws-trading/darwin-trader/web/src/App.tsx)) renders a placeholder **Strategy Lifecycle** panel ([`web/src/components/StrategySidebar.tsx`](file:///c:/Users/rogal/workspaces/ws-trading/darwin-trader/web/src/components/StrategySidebar.tsx)) hardcoded to `Darwin_Trend_ATR_V1 (EURUSD)` with stubbed `/start`, `/pause`, `/stop` state flags that are unsynchronized with the chart asset and provide no real execution loop.
+
+### 1.2 Design Decisions (Aligned via `/grill-me`)
+1. **Data Scope:** Bring over Yahoo Finance daily OHLCV (`stock_prices`), Ticker Metadata (`tickers`: `symbol`, `name`, `market`, `sector`, `industry`, `active`), and Fundamentals & Quarterly Valuation Multiples (`quarterly_eps`, `quarterly_revenue`, and `valuation_history`).
+2. **Dedicated Embedded SQLite Storage (`data/yahoo_finance.db`):** Store all Yahoo Finance tables in a dedicated SQLite WAL database (`data/yahoo_finance.db`), keeping `darwin-trader` 100% self-contained without requiring an external PostgreSQL/Docker server, while cleanly isolating Yahoo Finance exchange data from the 3.5 GB MT5 `data/historical_rates.db`.
+3. **PostgreSQL Data Migration + Live Yahoo Sync Engine:**
+   - Provide a deterministic migration utility/CLI command to migrate all existing `tickers` (1,011), `stock_prices` (1.31M), and `valuation_history` (12.3k) records from `localhost:5433/fractanomicsdb` into `data/yahoo_finance.db`.
+   - Port the `yahooquery` fetcher (OHLCV + quarterly EPS/revenue, sector/industry metadata, and valuation history) into `strategy_engine/` and expose it via both `python -m strategy_engine.cli` and FastAPI REST endpoints (`/api/v1/yahoo/...`).
+4. **Top-Level Web Dashboard Tabs & StrategySidebar Removal:**
+   - Introduce top-level navigation tabs in [`web/src/App.tsx`](file:///c:/Users/rogal/workspaces/ws-trading/darwin-trader/web/src/App.tsx): **`Darwinex MT5`** and **`Yahoo Finance`**.
+   - On the **`Darwinex MT5`** tab, remove the placeholder [`StrategySidebar`](file:///c:/Users/rogal/workspaces/ws-trading/darwin-trader/web/src/components/StrategySidebar.tsx) so [`PositionsGrid`](file:///c:/Users/rogal/workspaces/ws-trading/darwin-trader/web/src/components/PositionsGrid.tsx) (Open Positions) spans the full width cleanly.
+5. **Master-Detail Yahoo Finance Workspace (`web/src/components/YahooWorkspace.tsx`):**
+   - **Ticker Explorer & Management:** Filterable by `Market`, `Sector`, `Industry`, `Active` status, and search query, with controls to add a ticker (`AAPL` or `NASDAQ:AAPL`), toggle active status, or delete a ticker.
+   - **TradingView Candlestick & Heikin-Ashi Chart:** Interactive chart supporting `D1`, `W1`, and `MN1` (resampled from daily Yahoo Finance bars) and client-side Heikin-Ashi toggle.
+   - **Fundamentals & Quarterly Valuation Panel:** Displays latest valuation multiples (`Trailing P/E`, `Forward P/E`, `P/B`, `P/S`, `PEG`, `EV/EBITDA`, `EV/Revenue`, `Market Cap`, `Enterprise Value`, `Dividend Yield`) and historical quarterly valuation / EPS / revenue records.
+   - **Sync & Catch-Up Actions:** Buttons to sync the selected ticker or run a background catch-up sync across active tickers with progress polling.
+6. **Client Scope:** Implement in `strategy_engine/`, `api_gateway/`, and `web/` (React Web Dashboard), leaving `tui/` untouched in this phase.
 
 ---
 
-## 🔍 Root-Cause Analysis & Ground Truth Comparison (TUI vs. Web)
+## 2. Target Architecture
 
-| Capability | TUI (`scripts/run-tui.ps1` + `tui/screens/connect_modal.py`) | Web App (`web/` prior to fix) |
-| :--- | :--- | :--- |
-| **Single-Command Server Startup** | `.\scripts\run-tui.ps1` checks if `127.0.0.1:8000` is open; if not, spawns `python -m uvicorn api_gateway.main:app --host 127.0.0.1 --port 8000` in the background, waits for `ONLINE`, and stops it on exit. | `npm run web` / `npm run dev` only starts Vite (`port 5173`), requiring a separate manual terminal for the FastAPI Gateway. |
-| **Zero-Click Auto-Connect to Live MT5** | Automatically sends `POST /api/v1/account/connect` with `{ login: 4000073238, server: "Darwinex-Live", mock_mode: false }`. Because `password` is omitted, `MT5Connector.initialize()` attaches directly to the running `terminal64.exe` via IPC without prompting. | Never calls `/api/v1/account/connect` on startup; leaves the API Gateway in its initial `StrategyConfig(mock_mode=True, mt5_server="Darwinex-Demo")` state. |
-| **Connect Modal Default Server** | `Darwinex-Live` (Select with `Darwinex-Demo`, `Darwinex-Live`, `MetaQuotes-Demo`) | `Darwinex-Demo` |
-| **Connect Modal Default Login** | `4000073238` | `""` (empty) |
-| **Connect Modal Terminal Path** | `C:\Program Files\Darwinex MetaTrader 5\terminal64.exe` (`#input-path`) | Missing |
-| **Connect Modal Default Mock Mode** | `False` (unchecked when MT5 terminal exists) | `True` (checked by default) |
+```mermaid
+flowchart TD
+    subgraph WebUI["React Web Dashboard (web/src)"]
+        App["App.tsx (Top-Level Tabs)"]
+        MT5Tab["Darwinex MT5 Tab\nChartWorkspace + Full-Width PositionsGrid"]
+        YFTab["Yahoo Finance Tab (YahooWorkspace.tsx)\nTicker Explorer + TradingView Chart + Fundamentals Panel"]
+        App --> MT5Tab
+        App --> YFTab
+    end
+
+    subgraph Gateway["FastAPI Gateway (api_gateway)"]
+        RoutesAssets["routes_assets.py & routes_account.py"]
+        RoutesYahoo["routes_yahoo.py (/api/v1/yahoo/*)"]
+    end
+
+    subgraph Engine["Strategy Engine (strategy_engine)"]
+        HistDB["historical_db.py\n(data/historical_rates.db - MT5)"]
+        YahooDB["yahoo_db.py\n(data/yahoo_finance.db - SQLite WAL)"]
+        YahooFetcher["yahoo_fetcher.py\n(yahooquery OHLCV + Metadata + Valuation + PG Migrator)"]
+        CLI["cli.py\n(yahoo-migrate, yahoo-sync)"]
+    end
+
+    MT5Tab --> RoutesAssets --> HistDB
+    YFTab --> RoutesYahoo --> YahooDB
+    RoutesYahoo --> YahooFetcher --> YahooDB
+    CLI --> YahooFetcher
+```
+
+### 2.1 SQLite Schema (`data/yahoo_finance.db`)
+Managed by `YahooFinanceDB` in `strategy_engine/yahoo_db.py` using WAL mode (`PRAGMA journal_mode=WAL;`, `PRAGMA synchronous=NORMAL;`, `PRAGMA busy_timeout=60000;`, `BEGIN IMMEDIATE` retry semantics matching `HistoricalRatesDB`):
+
+```sql
+CREATE TABLE IF NOT EXISTS tickers (
+    symbol TEXT PRIMARY KEY,
+    name TEXT DEFAULT '',
+    market TEXT DEFAULT '',
+    sector TEXT DEFAULT '',
+    industry TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS stock_prices (
+    symbol TEXT NOT NULL,
+    date TEXT NOT NULL,           -- ISO YYYY-MM-DD
+    open REAL NOT NULL,
+    high REAL NOT NULL,
+    low REAL NOT NULL,
+    close REAL NOT NULL,
+    volume INTEGER NOT NULL DEFAULT 0,
+    quarterly_eps REAL,
+    quarterly_revenue REAL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (symbol, date DESC)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS valuation_history (
+    symbol TEXT NOT NULL,
+    as_of_date TEXT NOT NULL,     -- ISO YYYY-MM-DD
+    period_type TEXT NOT NULL DEFAULT '',
+    trailing_pe REAL,
+    forward_pe REAL,
+    pb REAL,
+    ps REAL,
+    peg REAL,
+    ev_ebitda REAL,
+    ev_revenue REAL,
+    market_cap REAL,
+    enterprise_value REAL,
+    dividend_yield REAL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (symbol, as_of_date DESC, period_type)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_tickers_sector_industry ON tickers(sector, industry);
+CREATE INDEX IF NOT EXISTS idx_tickers_market ON tickers(market);
+```
 
 ---
 
 ## 🎯 Final Decision Plan & User Story Specification
 
 ### User Story
-**As an** algorithmic trader using Darwin Trader,
-**I want** the Web application (`npm run web` / `.\scripts\run-web.ps1`) to automatically start the FastAPI Gateway if it is not running, automatically attach to my live Darwinex MT5 terminal (`4000073238` on `Darwinex-Live`, `mock_mode: false`) without prompting for credentials, and pre-populate the Connect Modal with the exact same defaults as the TUI,
-**So that** I can launch the Web server with a single command and start working immediately with live DarwinX Zero telemetry.
+**As a** quantitative trader using Darwin Trader,
+**I want** to migrate and synchronize Yahoo Finance stock data (deep daily OHLCV, market/sector/industry metadata, quarterly EPS/revenue, and valuation multiples) into a dedicated local SQLite database (`data/yahoo_finance.db`) and explore it in a dedicated Web Dashboard tab while cleaning up the unused `StrategySidebar` on the Darwinex MT5 tab,
+**So that** I can analyze real exchange history and company fundamentals alongside my live Darwinex Zero MT5 account without needing external database servers.
 
-### Architectural Decisions (Resolved via `/grill-me`)
+### Component Impact Table
 
-1. **Dual Single-Command Startup (`web/vite.config.ts` + `scripts/run-web.ps1`):**
-   - **Vite Dev Server Lifecycle Plugin (`web/vite.config.ts`):**
-     - Implement `darwinGatewayPlugin()` executing inside `configureServer` (skipped when running under Vitest or production build).
-     - Checks TCP connectivity to `127.0.0.1:8000`. If port `8000` is not open, spawns `python -m uvicorn api_gateway.main:app --host 127.0.0.1 --port 8000` with `cwd` set to the repository root (`..`), polls `http://127.0.0.1:8000/` until `"status": "ONLINE"` (up to 10 seconds), and hooks server/process termination to cleanly kill the spawned Python process on exit.
-     - Whether the Gateway was spawned by Vite or was already running on port `8000`, dispatches `POST http://127.0.0.1:8000/api/v1/account/connect` with `{ login: 4000073238, server: "Darwinex-Live", path: "C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe", mock_mode: false }` (unless `VITE_MOCK_MODE=true` is set).
-   - **PowerShell Launcher (`scripts/run-web.ps1`):**
-     - Mirrors `scripts/run-tui.ps1`: checks if `terminal64.exe` is running, checks/starts the FastAPI Gateway on `127.0.0.1:8000`, auto-connects to `4000073238` on `Darwinex-Live` (unless `-Mock` is passed), runs `npm --prefix web run web`, and stops the background Gateway on exit if started by the script.
-
-2. **Frontend Auto-Connect Assurance (`web/src/App.tsx`):**
-   - On initial mount in `App.tsx`, checks `api.getConnectionStatus()`. If the Gateway has not yet connected to live (`mock_mode === true` and `server === 'Darwinex-Demo'`), dispatches `accountApi.connect({ login: 4000073238, server: 'Darwinex-Live', path: DEFAULT_TERMINAL_PATH, mock_mode: false })` once in the background.
-   - Does **not** open `ConnectModal` automatically; `ConnectModal` opens only when the operator clicks `"Connect MT5..."` or `"Broker Connection Settings..."`.
-
-3. **1:1 `ConnectModal.tsx` Parity with TUI (`web/src/components/ConnectModal.tsx`):**
-   - Aligns constants with `tui/screens/connect_modal.py`:
-     - `DEFAULT_LOGIN = 4000073238`
-     - `DEFAULT_SERVER = 'Darwinex-Live'`
-     - `SERVER_CHOICES = ['Darwinex-Demo', 'Darwinex-Live', 'MetaQuotes-Demo']`
-     - `DEFAULT_TERMINAL_PATH = 'C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe'`
-     - `defaultMockMode = false`
-   - Adds optional **Terminal Path** input (`data-testid="connect-path-input"`) pre-filled with `DEFAULT_TERMINAL_PATH`.
-   - Updates **Server** field (`data-testid="connect-server-input"`) to offer `SERVER_CHOICES` defaulting to `'Darwinex-Live'`.
-   - Pre-fills **MT5 Login Account** (`data-testid="connect-login-input"`) with `4000073238`.
-   - Keeps **Password** (`data-testid="connect-password-input"`) optional so empty password performs passwordless IPC attach to the running `terminal64.exe` instance.
-   - Sets **Simulation / Mock Mode** (`data-testid="connect-mock-mode-input"`) to `false` (unchecked) by default.
-
----
-
-### Component Impact Table (Pattern A — Standalone Slice)
-
-| File | Action | Description |
-| :--- | :--- | :--- |
-| `web/vite.config.ts` | Modify | Add `darwinGatewayPlugin` to auto-start FastAPI Gateway on `127.0.0.1:8000` (if not running), auto-connect to `4000073238` / `Darwinex-Live` during `npm run web` / `npm run dev`, and clean up on exit. |
-| `scripts/run-web.ps1` | Create | PowerShell launcher mirroring `scripts/run-tui.ps1` for one-command Web + API launch and teardown. |
-| `web/src/components/ConnectModal.tsx` | Modify | Align defaults (`4000073238`, `Darwinex-Live`, `mockMode = false`, `DEFAULT_TERMINAL_PATH`, server selector) 1:1 with TUI `ConnectModal`. |
-| `web/src/App.tsx` | Modify | Add mount-time auto-connect check to `4000073238` / `Darwinex-Live` if gateway is still in initial default mock state, while keeping `ConnectModal` closed by default. |
-| `web/src/components/ConnectModal.test.tsx` & `web/src/App.test.tsx` | Modify | Update and expand unit/integration tests verifying TUI-parity defaults, Terminal Path payload, and auto-connect behavior. |
+| Layer | File | Action | Description |
+| :--- | :--- | :--- | :--- |
+| **Strategy Engine** | `strategy_engine/yahoo_db.py` | **CREATE** | SQLite WAL storage layer (`YahooFinanceDB`) for `tickers`, `stock_prices` (with `D1`/`W1`/`MN1` resampling), and `valuation_history`, plus filter/search queries. |
+| **Strategy Engine** | `strategy_engine/yahoo_fetcher.py` | **CREATE** | Yahoo Finance (`yahooquery`) fetcher for OHLCV + quarterly EPS/revenue, ticker metadata (`sector`, `industry`, `name`), valuation multiples (`valuation_measures`), and PostgreSQL (`fractanomicsdb`) batch migrator. |
+| **Strategy Engine** | `strategy_engine/cli.py` | **MODIFY** | Add `yahoo-migrate` and `yahoo-sync` subcommands to `python -m strategy_engine.cli`. |
+| **API Gateway** | `api_gateway/routes_yahoo.py` | **CREATE** | FastAPI router `/api/v1/yahoo` for ticker CRUD/filtering, OHLCV history (`D1`/`W1`/`MN1`), fundamentals & valuation history, single-ticker sync, and background catch-up sync status. |
+| **API Gateway** | `api_gateway/main.py` | **MODIFY** | Register `yahoo_router` under `/api/v1/yahoo`. |
+| **Web Client** | `web/src/api/yahoo.ts` | **CREATE** | Typed Axios client for `/api/v1/yahoo/*` endpoints. |
+| **Web Client** | `web/src/components/YahooWorkspace.tsx` | **CREATE** | Master-Detail Yahoo Finance tab component with filterable ticker list, add/toggle/delete ticker controls, TradingView Candlestick/Heikin-Ashi chart (`D1`/`W1`/`MN1`), fundamentals/valuation panel, and sync controls. |
+| **Web Client** | `web/src/App.tsx` | **MODIFY** | Add top-level tabs (`Darwinex MT5` and `Yahoo Finance`) and remove `StrategySidebar` from the `Darwinex MT5` tab so `PositionsGrid` spans full width. |
 
 ---
 
 ### Gherkin BDD Acceptance Criteria
 
 ```gherkin
-Feature: Unified Web & TUI Startup, Auto-Connect, and ConnectModal Parity
+Feature: Yahoo Finance Storage, Migration, Sync Engine, and Web Explorer Tab
 
-  Scenario 1: Single-command Web startup automatically starts FastAPI Gateway and connects to Darwinex-Live
-    Given the FastAPI Gateway on 127.0.0.1:8000 is not running
-    When the operator executes "npm run web" (or ".\scripts\run-web.ps1")
-    Then the FastAPI Gateway is spawned automatically in the background on 127.0.0.1:8000
-    And once the Gateway reports status "ONLINE", a POST request to "/api/v1/account/connect" is sent with login 4000073238, server "Darwinex-Live", and mock_mode false
-    And when the Web server stops, the spawned FastAPI Gateway process is cleanly terminated
+  Scenario 1: Deterministic SQLite WAL storage and timeframe resampling in YahooFinanceDB
+    Given an initialized YahooFinanceDB instance backed by "data/yahoo_finance.db"
+    When tickers, daily stock_prices (with quarterly_eps and quarterly_revenue), and valuation_history records are upserted
+    Then querying tickers supports filtering by market, sector, industry, active status, and case-insensitive search
+    And querying price history for "D1", "W1", or "MN1" returns chronologically ordered bars with accurate weekly/monthly OHLCV aggregation
+    And querying fundamentals for a symbol returns both the latest valuation snapshot and historical quarterly valuation and earnings series
 
-  Scenario 2: Starting Web server when FastAPI Gateway is already running reuses the Gateway and auto-connects
-    Given the FastAPI Gateway is already listening on 127.0.0.1:8000
-    When the operator executes "npm run web" (or opens the Web application)
-    Then no duplicate FastAPI Gateway process is spawned
-    And the Gateway is automatically connected to login 4000073238 on "Darwinex-Live" with mock_mode false
-    And the Connect Modal remains closed on startup
+  Scenario 2: Migration from PostgreSQL fractanomicsdb to SQLite yahoo_finance.db
+    Given a PostgreSQL source database with tickers, stock_prices, and valuation_history tables
+    When the migration routine `migrate_from_postgres` (or `python -m strategy_engine.cli yahoo-migrate`) is executed
+    Then all tickers, stock_prices, and valuation_history rows are batch-copied into `data/yahoo_finance.db` idempotently using upsert semantics
+    And the command reports total migrated counts for tickers, price rows, and valuation rows with exit code 0
 
-  Scenario 3: ConnectModal pre-populates 1:1 with TUI defaults
-    Given the Web application is loaded
-    When the operator clicks "Connect MT5..." to open the Connect Modal
-    Then the Login input is pre-filled with 4000073238
-    And the Server selector defaults to "Darwinex-Live" with options "Darwinex-Demo", "Darwinex-Live", and "MetaQuotes-Demo"
-    And the Terminal Path input is pre-filled with "C:\Program Files\Darwinex MetaTrader 5\terminal64.exe"
-    And the Password input is empty and optional
-    And the "Simulation / Mock Mode" checkbox is unchecked (false) by default
+  Scenario 3: Yahoo Finance Ticker Sync (OHLCV, Metadata, and Valuation Multiples)
+    Given a tracked ticker (e.g., "NASDAQ:AAPL" or "BME:SAN") in YahooFinanceDB
+    When the Yahoo Finance sync engine fetches updates via `yahooquery`
+    Then symbol market suffixes (e.g., ".MC" for BME, ".L" for LSE, ".DE" for XETR) are formatted automatically
+    And daily OHLCV bars, quarterly EPS/revenue, sector/industry metadata, and quarterly valuation measures are upserted into `data/yahoo_finance.db`
 
-  Scenario 4: Passwordless IPC submission from ConnectModal
-    Given the Connect Modal is open with default TUI-parity values (4000073238, "Darwinex-Live", mock_mode false, empty password)
-    When the operator clicks "Connect"
-    Then POST "/api/v1/account/connect" is dispatched with login 4000073238, password "", server "Darwinex-Live", path "C:\Program Files\Darwinex MetaTrader 5\terminal64.exe", and mock_mode false
-    And the modal closes upon receiving status "CONNECTED"
+  Scenario 4: FastAPI /api/v1/yahoo REST Endpoints
+    Given the FastAPI Gateway with `routes_yahoo.py` mounted at `/api/v1/yahoo`
+    When a client requests `GET /api/v1/yahoo/tickers`, `POST /api/v1/yahoo/tickers`, `PATCH /api/v1/yahoo/tickers/{symbol}`, or `DELETE /api/v1/yahoo/tickers/{symbol}`
+    Then tickers and distinct filter facets (markets, sectors, industries) are returned or updated accurately
+    And `GET /api/v1/yahoo/tickers/{symbol}/history?timeframe=W1` returns resampled OHLCV bars
+    And `GET /api/v1/yahoo/tickers/{symbol}/fundamentals` returns latest valuation metrics, valuation history, and quarterly EPS/revenue history
+    And `POST /api/v1/yahoo/sync` triggers single-ticker or background batch catch-up synchronization with status polling at `GET /api/v1/yahoo/sync/status`
+
+  Scenario 5: Top-Level Workspace Tabs and Darwinex MT5 Full-Width Positions Grid
+    Given the user opens the Darwin Trader Web Dashboard (`App.tsx`)
+    Then top-level navigation tabs "Darwinex MT5" and "Yahoo Finance" are visible
+    And on the default "Darwinex MT5" tab, `ChartWorkspace` and a full-width `PositionsGrid` are rendered without the legacy `StrategySidebar`
+    When the user clicks the "Yahoo Finance" tab
+    Then the `YahooWorkspace` master-detail view is rendered
+
+  Scenario 6: Yahoo Finance Master-Detail Workspace Interaction
+    Given the user is on the "Yahoo Finance" tab (`YahooWorkspace.tsx`)
+    When the workspace loads
+    Then the filterable ticker list, market/sector/industry filter selectors, TradingView candlestick chart (`D1`/`W1`/`MN1` + Heikin-Ashi toggle), and Fundamentals & Valuation panel are displayed
+    When the user selects a ticker, changes timeframe, adds a new ticker, or clicks "Sync Ticker" / "Catch-Up All"
+    Then the chart and fundamentals panel update reactively with the selected ticker's Yahoo Finance data
 ```
+
+---
+
+### Functional Slice Breakdown (Strict Sizing Boundary: $\le 4$ files, $\le 300$ LOC per slice)
+
+#### Slice 1: `YahooFinanceDB` SQLite WAL Storage Layer & Resampling Engine
+- **Files:**
+  - `strategy_engine/yahoo_db.py` (CREATE)
+  - `strategy_engine/tests/test_yahoo_db.py` (CREATE)
+- **Scope:** Implement `YahooFinanceDB` (`tickers`, `stock_prices`, `valuation_history` tables in SQLite WAL mode), filter/facet queries (`get_tickers`, `get_filter_facets`, `upsert_tickers`, `set_ticker_active`, `delete_ticker`), OHLCV upsert & `D1`/`W1`/`MN1` resampling (`upsert_stock_prices`, `get_price_history`, `get_quarterly_financials`), and valuation history (`upsert_valuation_history`, `get_fundamentals_summary`).
+
+#### Slice 2: Yahoo Finance (`yahooquery`) Fetcher, PostgreSQL Migrator & CLI Commands
+- **Files:**
+  - `strategy_engine/yahoo_fetcher.py` (CREATE)
+  - `strategy_engine/cli.py` (MODIFY)
+  - `strategy_engine/tests/test_yahoo_fetcher.py` (CREATE)
+- **Scope:** Implement `format_yahoo_ticker` (exchange suffix mapper from `stock-manager-cli`), `fetch_ticker_ohlcv_and_earnings`, `fetch_ticker_metadata`, `fetch_ticker_valuation`, `sync_yahoo_tickers` (with incremental date range detection), and `migrate_postgres_to_sqlite` (batch copying `tickers`, `stock_prices`, `valuation_history` from PostgreSQL into `data/yahoo_finance.db`). Wire `yahoo-migrate` and `yahoo-sync` subcommands into `strategy_engine/cli.py`.
+
+#### Slice 3: FastAPI `/api/v1/yahoo` Gateway Router
+- **Files:**
+  - `api_gateway/routes_yahoo.py` (CREATE)
+  - `api_gateway/main.py` (MODIFY)
+  - `api_gateway/tests/test_routes_yahoo.py` (CREATE)
+- **Scope:** Expose `GET /api/v1/yahoo/tickers` (with `market`, `sector`, `industry`, `active`, `search` filters + facets), `POST /api/v1/yahoo/tickers`, `PATCH /api/v1/yahoo/tickers/{symbol}`, `DELETE /api/v1/yahoo/tickers/{symbol}`, `GET /api/v1/yahoo/tickers/{symbol}/history`, `GET /api/v1/yahoo/tickers/{symbol}/fundamentals`, `POST /api/v1/yahoo/sync`, and `GET /api/v1/yahoo/sync/status`. Mount router in `api_gateway/main.py`.
+
+#### Slice 4: Web Dashboard Tabs, `StrategySidebar` Removal & `YahooWorkspace` View
+- **Files:**
+  - `web/src/api/yahoo.ts` (CREATE)
+  - `web/src/components/YahooWorkspace.tsx` (CREATE)
+  - `web/src/App.tsx` (MODIFY)
+  - `web/src/App.test.tsx` & `web/src/components/YahooWorkspace.test.tsx` (MODIFY / CREATE)
+- **Scope:** Implement typed `yahooApi` client, create `YahooWorkspace` master-detail component (filterable ticker explorer + add/toggle/delete ticker + TradingView `D1`/`W1`/`MN1` & Heikin-Ashi chart + Fundamentals & Valuation panel + sync buttons), add top-level `Darwinex MT5` / `Yahoo Finance` tabs in `App.tsx`, and remove `StrategySidebar` from the `Darwinex MT5` tab so `PositionsGrid` spans full width.

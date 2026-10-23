@@ -59,10 +59,12 @@ describe('ChartWorkspace', () => {
       expect(screen.getByTestId('ols-beta-val')).toHaveTextContent('1.150');
     });
 
-    expect(mockSeries.setData).toHaveBeenCalledWith([
-      { time: 1709510400, open: 102.0, high: 103.0, low: 98.0, close: 99.0 },
-      { time: 1710115200, open: 99.0, high: 106.0, low: 98.5, close: 105.0 },
-    ]);
+    await waitFor(() => {
+      expect(mockSeries.setData).toHaveBeenCalledWith([
+        { time: 1709510400, open: 102.0, high: 103.0, low: 98.0, close: 99.0 },
+        { time: 1710115200, open: 99.0, high: 106.0, low: 98.5, close: 105.0 },
+      ]);
+    });
   });
 
   it('toggles Heikin-Ashi client-side without backend requests (Scenario 8)', async () => {

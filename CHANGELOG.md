@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Yahoo Finance Market Data Integration, Legacy Data Migration & Web Explorer Workspace (`002-yahoo-finance-workspace`)**:
+  - Updated `.specify/memory/constitution.md` (`v1.1.0`) adding Principle VI (*Multi-Provider Data Isolation & Self-Contained Storage*) to govern isolated SQLite WAL stores (`data/historical_rates.db` for Darwinex MT5 and `data/yahoo_finance.db` for Yahoo Finance).
+  - Implemented `YahooFinanceDB` in `strategy_engine/yahoo_db.py` with SQLite `WAL` mode, `BEGIN IMMEDIATE` exponential-backoff write retry, `MARKET:SYMBOL` normalization, `NaN`/`Inf` sanitization, ticker CRUD & filter facets, `D1`/`W1`/`MN1` OHLCV resampling, and quarterly valuation/earnings queries.
+  - Implemented `strategy_engine/yahoo_fetcher.py` and extended `strategy_engine/cli.py` with `yahoo-migrate` and `yahoo-sync` subcommands; migrated 1,011 tickers, 1,313,120 daily price rows, and 12,374 quarterly valuation rows from PostgreSQL (`fractanomicsdb`) into `data/yahoo_finance.db`.
+  - Implemented FastAPI router `api_gateway/routes_yahoo.py` (`/api/v1/yahoo/tickers`, `POST /tickers`, `PATCH /tickers/{symbol}`, `DELETE /tickers/{symbol}`, `GET /tickers/{symbol}/history`, `GET /tickers/{symbol}/fundamentals`, `POST /sync`, `GET /sync/status`) and mounted it in `api_gateway/main.py`.
+  - Added top-level `Darwinex MT5` and `Yahoo Finance` workspace tabs in `web/src/App.tsx`, removed the unused `StrategySidebar` from the `Darwinex MT5` tab so `PositionsGrid` spans full width, and implemented `web/src/components/YahooWorkspace.tsx` and `web/src/api/yahoo.ts` with multi-facet filtering (`Market`, `Sector`, `Industry`, `Active`, search), ticker management, TradingView `D1`/`W1`/`MN1` + Heikin-Ashi chart, and Fundamentals & Quarterly Valuation tables.
+  - Added comprehensive unit and integration tests across `strategy_engine/tests/test_yahoo_db.py`, `strategy_engine/tests/test_yahoo_fetcher.py`, `api_gateway/tests/test_routes_yahoo.py`, `web/src/api/yahoo.test.ts`, `web/src/components/YahooWorkspace.test.tsx`, and `web/src/App.test.tsx`.
+
 - **Automated Claude Opus 5.5 (High Effort) PR Review, Auto-Fix & Squash-Merge Pipeline (.github/workflows/claude.yml, .github/workflows/pr-review.yml, .github/workflows/merge.yml)**:
   - Added .github/workflows/claude.yml (--model claude-opus-5-5 --effort high) so @claude mentions in Issues, Pull Requests, and PR Review Comments trigger interactive Claude Code sessions on GitHub.com.
   - Upgraded and enabled .github/workflows/pr-review.yml and .github/workflows/prompts/pr-review.md to run Claude Opus 5.5 (high effort) on every non-draft Pull Request, automatically fix code/test/lint issues in place, verify the test suite, push auto-fix commits ([skip pr-review]), wait for CI checks to pass, and automatically squash-merge the PR.
