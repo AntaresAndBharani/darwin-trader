@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -187,3 +189,73 @@ def test_us3_exact_sha_ci_polling_failure_fallback_and_merge_yml_retired(
     assert 'if [ "$CI_PASSED" != "true" ]; then' in merge_run
     assert "review:changes-requested" in merge_run
     assert 'gh pr merge "$PR_NUMBER" -R "$REPO" --squash --delete-branch' in merge_run
+
+
+def test_us2_merge_only_requires_exact_approved_verdict_header(workflow_doc: dict[str, Any]) -> None:
+    """FR-002: A CHANGES_REQUESTED review whose body mentions 'APPROVED' must not enter merge_only."""
+    meta_run = _get_step_by_id(workflow_doc, "meta").get("run", "")
+    assert '== *"PR Review Verdict: **APPROVED**"*' in meta_run
+    assert '== *"APPROVED"*' not in meta_run
+
+    verdict_run = _get_step_by_id(workflow_doc, "verdict_step").get("run", "")
+    assert "### PR Review Verdict: **{verdict}**" in verdict_run
+
+
+def _ci_status_jq(workflow_doc: dict[str, Any]) -> str:
+    merge_run = _get_step_by_id(workflow_doc, "merge_step").get("run", "")
+    prefix = "CI_STATUS_JQ='"
+    assert prefix in merge_run
+    return merge_run.split(prefix, 1)[1].split("'\n", 1)[0]
+
+
+@pytest.mark.parametrize(
+    ("runs", "expected"),
+    [
+        ([], ""),
+        ([{"status": "in_progress", "conclusion": ""}], "in_progress"),
+        ([{"status": "completed", "conclusion": "success"}], "completed:success"),
+        (
+            [
+                {"status": "completed", "conclusion": "success"},
+                {"status": "queued", "conclusion": ""},
+            ],
+            "in_progress",
+        ),
+        (
+            [
+                {"status": "completed", "conclusion": "success"},
+                {"status": "completed", "conclusion": "failure"},
+            ],
+            "completed:failure",
+        ),
+        ([{"status": "completed", "conclusion": "startup_failure"}], "completed:startup_failure"),
+    ],
+)
+def test_us3_ci_status_aggregates_every_run_for_commit(
+    workflow_doc: dict[str, Any], runs: list[dict[str, str]], expected: str
+) -> None:
+    """FR-005: push + pull_request CI runs on the same SHA must all succeed before merging."""
+    jq_bin = shutil.which("jq")
+    if jq_bin is None:
+        pytest.skip("jq not installed")
+    result = subprocess.run(
+        [jq_bin, "-r", _ci_status_jq(workflow_doc)],
+        input=json.dumps(runs),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == expected
+
+
+def test_us3_merge_guards_against_unreviewed_head_commits(workflow_doc: dict[str, Any]) -> None:
+    """FR-006: With cancel-in-progress disabled, merge only the exact reviewed & CI-verified SHA."""
+    merge_step = _get_step_by_id(workflow_doc, "merge_step")
+    merge_run = merge_step.get("run", "")
+    assert '--match-head-commit "$CURRENT_SHA"' in merge_run
+    assert '[ "$PR_HEAD_SHA" != "$CURRENT_SHA" ]' in merge_run
+    assert "merged=true" in merge_run
+    assert "merged=false" in merge_run
+
+    story_cond = str(_get_step_by_id(workflow_doc, "close_story_step").get("if", ""))
+    assert "steps.merge_step.outputs.merged == 'true'" in story_cond

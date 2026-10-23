@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Scoped pre-merge CI polling strictly to `--commit "$CURRENT_SHA"` (60 attempts x 10s = 10 minutes max) with an explicit `CI_PASSED="true"` gate, transitioning the PR label to `review:changes-requested` with a diagnostic comment if CI fails or times out.
   - Retired `.github/workflows/merge.yml` and consolidated post-merge parent-story closure into `.github/workflows/pr-review.yml`, eliminating duplicate merge workflow runs.
   - Added deterministic offline workflow contract and helper tests in `strategy_engine/tests/test_pr_review_workflow.py` and amended `.specify/memory/constitution.md` to `v1.2.0`.
+  - Hardened the review findings: `merge_only` now requires the exact `PR Review Verdict: **APPROVED**` header, CI polling aggregates every `CI` run on the commit (push + pull_request) and treats any non-success conclusion as failure, merges use `--match-head-commit` and skip when unreviewed commits were pushed mid-review, and `pyyaml` was added to `strategy_engine/requirements.txt` so the new tests collect in CI.
 
 ### Added
 - **Automated Claude Opus 5.5 (High Effort) PR Review, Auto-Fix & Squash-Merge Pipeline (.github/workflows/claude.yml, .github/workflows/pr-review.yml, .github/workflows/merge.yml)**:
