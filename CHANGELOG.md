@@ -7,8 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Interactive Claude Code GitHub App Workflow (.github/workflows/claude.yml)**:
-  - Added .github/workflows/claude.yml using nthropics/claude-code-action@v1 with org-level CLAUDE_CODE_OAUTH_TOKEN authentication so @claude mentions in Issues, Pull Requests, and PR Review Comments trigger interactive Claude Code sessions on GitHub.com.
+- **Automated Claude Opus 5.5 (High Effort) PR Review, Auto-Fix & Squash-Merge Pipeline (.github/workflows/claude.yml, .github/workflows/pr-review.yml, .github/workflows/merge.yml)**:
+  - Added .github/workflows/claude.yml (--model claude-opus-5-5 --effort high) so @claude mentions in Issues, Pull Requests, and PR Review Comments trigger interactive Claude Code sessions on GitHub.com.
+  - Upgraded and enabled .github/workflows/pr-review.yml and .github/workflows/prompts/pr-review.md to run Claude Opus 5.5 (high effort) on every non-draft Pull Request, automatically fix code/test/lint issues in place, verify the test suite, push auto-fix commits ([skip pr-review]), wait for Build APK & CI checks to pass, and automatically squash-merge the PR.
 
 - **Unified Web & TUI Startup, Auto-Connect, and ConnectModal Parity (`001-web-tui-parity`)**:
   - Ratified project engineering governance in `.specify/memory/constitution.md` (`v1.0.0`) establishing Clean Architecture, Darwinex Zero Risk Guardrails, Multi-Client TUI/Web Parity, Test-First Simulation, and Concurrency Lock Discipline.

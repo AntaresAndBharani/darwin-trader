@@ -5,7 +5,7 @@ on:
     types: [labeled]
 
 permissions:
-  contents: read
+  contents: write
   issues: write
   pull-requests: write
 
@@ -21,10 +21,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Merge the approved PR
+      - name: Wait for CI and Merge the approved PR
         run: |
           set -euo pipefail
-          gh pr merge "$PR_NUMBER" -R "$REPO" --auto --squash --delete-branch
+          HEAD_REF=$(gh pr view "$PR_NUMBER" -R "$REPO" --json headRefName -q '.headRefName')
+          sleep 5
+          for i in $(seq 1 30); do
+            BUILD_STATUS=$(gh run list -R "$REPO" -b "$HEAD_REF" -w "Build APK & CI" -L 1 --json status,conclusion -q '.[0] | "\(.status):\(.conclusion)"' || echo "")
+            echo "Build APK & CI status ($i/30): $BUILD_STATUS"
+            if [ "$BUILD_STATUS" = "completed:success" ]; then
+              break
+            elif [ "$BUILD_STATUS" = "completed:failure" ] || [ "$BUILD_STATUS" = "completed:cancelled" ]; then
+              echo "Build APK & CI failed ($BUILD_STATUS). Aborting merge."
+              exit 1
+            fi
+            sleep 10
+          done
+
+          PR_STATE=$(gh pr view "$PR_NUMBER" -R "$REPO" --json state -q '.state')
+          if [ "$PR_STATE" = "OPEN" ]; then
+            gh pr merge "$PR_NUMBER" -R "$REPO" --squash --delete-branch || true
+          fi
 
       - name: Close the parent story once every subtask is done
         run: |

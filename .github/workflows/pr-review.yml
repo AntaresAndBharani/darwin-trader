@@ -2,17 +2,24 @@ name: PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, ready_for_review, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Pull Request number to review, auto-fix, and merge'
+        required: true
+        type: string
 
 concurrency:
-  group: pr-review-${{ github.event.pull_request.number }}
+  group: pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   issues: write
   pull-requests: write
   id-token: write
+  actions: read
 
 env:
   ROUND_CAP: 3
@@ -21,47 +28,144 @@ env:
 jobs:
   pr-review:
     runs-on: ubuntu-latest
-    if: secrets.CLAUDE_CODE_OAUTH_TOKEN != ''
+    if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
     env:
       GH_TOKEN: ${{ secrets.ORCHESTRATION_PAT || secrets.GITHUB_TOKEN }}
-      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
       REPO: ${{ github.repository }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Fetch PR context
+      - name: Check PR state, loop cap, and skip markers
+        id: meta
         run: |
           set -euo pipefail
-          gh pr view "$PR_NUMBER" -R "$REPO" --json number,title,body,url,comments > pr_meta.json
+          PR_JSON=$(gh pr view "$PR_NUMBER" -R "$REPO" --json state,isDraft,headRefName,headRefOid,comments)
+          STATE=$(echo "$PR_JSON" | jq -r '.state')
+          IS_DRAFT=$(echo "$PR_JSON" | jq -r '.isDraft')
+          HEAD_REF=$(echo "$PR_JSON" | jq -r '.headRefName')
+          HEAD_SHA=$(echo "$PR_JSON" | jq -r '.headRefOid')
+
+          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+          if [ "$STATE" != "OPEN" ] || [ "$IS_DRAFT" = "true" ]; then
+            echo "PR #$PR_NUMBER is not open/ready (state=$STATE, draft=$IS_DRAFT). Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LAST_MSG=$(gh api "repos/$REPO/commits/$HEAD_SHA" -q '.commit.message' || echo "")
+          if [[ "$LAST_MSG" == *"[skip pr-review]"* ]]; then
+            echo "Latest commit ($HEAD_SHA) is an automated PR-review fix commit ([skip pr-review]). Skipping redundant review."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ROUNDS=$(echo "$PR_JSON" | jq '[.comments[].body | select(contains("<!-- pr-review-verdict -->"))] | length')
+          if [ "$ROUNDS" -ge "$ROUND_CAP" ]; then
+            echo "Reached round cap ($ROUNDS >= $ROUND_CAP). Escalating to PO."
+            gh pr edit "$PR_NUMBER" -R "$REPO" --add-label "status:needs-po-input" || true
+            gh pr comment "$PR_NUMBER" -R "$REPO" --body "<!-- pr-review-verdict -->
+          ⚠️ **PR Review Escalation:** Reached maximum automated review/fix rounds ($ROUND_CAP). Marking \`status:needs-po-input\` for human review."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR branch
+        if: steps.meta.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.head_ref }}
+          token: ${{ secrets.ORCHESTRATION_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        if: steps.meta.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        if: steps.meta.outputs.skip != 'true'
+        run: |
+          pip install --upgrade pip
+          pip install -r api_gateway/requirements.txt
+          pip install -r strategy_engine/requirements.txt
+          pip install pytest httpx
+
+      - name: Set up Node.js 20
+        if: steps.meta.outputs.skip != 'true' && hashFiles('web/package-lock.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: Install Frontend dependencies
+        if: steps.meta.outputs.skip != 'true' && hashFiles('web/package-lock.json') != ''
+        working-directory: web
+        run: npm ci
+
+      - name: Fetch PR context
+        if: steps.meta.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" -R "$REPO" --json number,title,body,url,headRefName,baseRefName,comments > pr_meta.json
           gh pr diff "$PR_NUMBER" -R "$REPO" > pr_diff.txt
 
-      - name: Run PR Review (Claude Sonnet)
+      - name: Run PR Review & Auto-Fix (Claude Opus 5.5 High)
+        if: steps.meta.outputs.skip != 'true'
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt_file: .github/workflows/prompts/pr-review.md
-          claude_args: '--model claude-sonnet-5 --permission-mode dontAsk --allowedTools "Read" "Grep" "Glob" "Write"'
+          github_token: ${{ secrets.ORCHESTRATION_PAT || secrets.GITHUB_TOKEN }}
+          prompt: |
+            Read and follow all instructions in .github/workflows/prompts/pr-review.md.
+            Review the PR, automatically fix any code/test/lint issues you find in the working tree, verify the test suite passes, and write your final output to pr_review_output.json.
+          claude_args: '--model claude-opus-5-5 --effort high --allowedTools "Read,Write,Edit,MultiEdit,Grep,Glob,Bash"'
+          additional_permissions: |
+            actions: read
 
-      - name: Apply review verdict
-        if: steps.claude.outcome == 'success' && hashFiles('pr_review_output.json') != ''
+      - name: Commit auto-fixes, apply verdict, and auto-merge when green
+        if: steps.meta.outputs.skip != 'true' && steps.claude.outcome == 'success' && hashFiles('pr_review_output.json') != ''
+        env:
+          HEAD_REF: ${{ steps.meta.outputs.head_ref }}
+          INITIAL_SHA: ${{ steps.meta.outputs.head_sha }}
         run: |
           set -euo pipefail
+          cp pr_review_output.json /tmp/pr_review_output.json
+          rm -f pr_meta.json pr_diff.txt pr_review_output.json
+
+          FIX_PUSHED="false"
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "claude[bot]"
+            git config user.email "41898282+claude[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "fix(pr-review): apply Claude Opus 5.5 auto-fixes [skip pr-review]"
+            git push origin "HEAD:${HEAD_REF}"
+            FIX_PUSHED="true"
+          elif [ "$(git rev-parse HEAD)" != "$INITIAL_SHA" ]; then
+            git push origin "HEAD:${HEAD_REF}"
+            FIX_PUSHED="true"
+          fi
+
+          export FIX_PUSHED
           python3 -c "
           import json, subprocess, os
 
-          with open('pr_review_output.json') as f:
+          with open('/tmp/pr_review_output.json') as f:
               data = json.load(f)
 
           verdict = data.get('verdict', 'CHANGES_REQUESTED')
           repo = os.environ['REPO']
           pr_num = os.environ['PR_NUMBER']
-          summary = data.get('pr_comment_markdown', 'PR review complete.')
+          fix_pushed = os.environ.get('FIX_PUSHED') == 'true'
+          summary = data.get('pr_comment_markdown') or data.get('summary') or 'PR review complete.'
 
-          comment_body = f'<!-- pr-review-verdict -->\n### PR Review Verdict: **{verdict}**\n\n{summary}'
+          fix_banner = '\n\n> 🔧 **Auto-Fix Applied:** Claude Opus 5.5 fixed review findings and pushed a commit to this PR branch.' if fix_pushed else ''
+          comment_body = f'<!-- pr-review-verdict -->\n### PR Review Verdict: **{verdict}**{fix_banner}\n\n{summary}'
           subprocess.run(['gh', 'pr', 'comment', pr_num, '-R', repo, '--body', comment_body], check=True)
 
           subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--remove-label', 'review:approved'], check=False)
@@ -72,11 +176,34 @@ jobs:
           else:
               subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--add-label', 'review:changes-requested'], check=True)
 
-          # File non-blocking follow-up issues
-          followups = data.get('followup_backlog_issues', [])
-          for item in followups:
+          for item in data.get('followup_backlog_issues', []):
               title = item.get('title', 'Followup issue')
               body = item.get('body', '')
               labels = ','.join(item.get('labels', ['tech-debt']))
-              subprocess.run(['gh', 'issue', 'create', '-R', repo, '--title', title, '--body', body, '--label', labels], check=True)
+              subprocess.run(['gh', 'issue', 'create', '-R', repo, '--title', title, '--body', body, '--label', labels], check=False)
           "
+
+          VERDICT=$(jq -r '.verdict // "CHANGES_REQUESTED"' /tmp/pr_review_output.json)
+          if [ "$VERDICT" = "APPROVED" ]; then
+            echo "Verdict is APPROVED. Waiting for Build APK & CI checks to pass before merging..."
+            sleep 8
+            for i in $(seq 1 30); do
+              BUILD_STATUS=$(gh run list -R "$REPO" -b "$HEAD_REF" -w "Build APK & CI" -L 1 --json status,conclusion -q '.[0] | "\(.status):\(.conclusion)"' || echo "")
+              echo "Build APK & CI status ($i/30): $BUILD_STATUS"
+              if [ "$BUILD_STATUS" = "completed:success" ]; then
+                break
+              elif [ "$BUILD_STATUS" = "completed:failure" ] || [ "$BUILD_STATUS" = "completed:cancelled" ]; then
+                echo "Build APK & CI failed ($BUILD_STATUS). Aborting auto-merge."
+                exit 1
+              fi
+              sleep 10
+            done
+
+            PR_STATE=$(gh pr view "$PR_NUMBER" -R "$REPO" --json state -q '.state')
+            if [ "$PR_STATE" = "OPEN" ]; then
+              gh pr merge "$PR_NUMBER" -R "$REPO" --squash --delete-branch
+              echo "Successfully squash-merged PR #$PR_NUMBER!"
+            else
+              echo "PR #$PR_NUMBER is already $PR_STATE."
+            fi
+          fi
