@@ -12,7 +12,7 @@ on:
 
 concurrency:
   group: pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -50,30 +50,42 @@ jobs:
           if [ "$STATE" != "OPEN" ] || [ "$IS_DRAFT" = "true" ]; then
             echo "PR #$PR_NUMBER is not open/ready (state=$STATE, draft=$IS_DRAFT). Skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "merge_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           LAST_MSG=$(gh api "repos/$REPO/commits/$HEAD_SHA" -q '.commit.message' || echo "")
           if [[ "$LAST_MSG" == *"[skip pr-review]"* ]]; then
-            echo "Latest commit ($HEAD_SHA) is an automated PR-review fix commit ([skip pr-review]). Skipping redundant review."
+            LAST_VERDICT_BODY=$(echo "$PR_JSON" | jq -r '[.comments[].body | select(contains("<!-- pr-review-verdict -->"))] | last // ""')
+            if [[ "$LAST_VERDICT_BODY" == *"APPROVED"* ]]; then
+              echo "Latest commit ($HEAD_SHA) is an approved [skip pr-review] commit. Entering merge_only fast-path (0 LLM tokens)."
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "merge_only=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Latest commit ($HEAD_SHA) is an automated PR-review fix commit ([skip pr-review]) without APPROVED verdict. Skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "merge_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           ROUNDS=$(echo "$PR_JSON" | jq '[.comments[].body | select(contains("<!-- pr-review-verdict -->"))] | length')
           if [ "$ROUNDS" -ge "$ROUND_CAP" ]; then
             echo "Reached round cap ($ROUNDS >= $ROUND_CAP). Escalating to PO."
+            gh label create "status:needs-po-input" -R "$REPO" --color "B60205" --description "Escalated to Product Owner after max review rounds" --force || true
             gh pr edit "$PR_NUMBER" -R "$REPO" --add-label "status:needs-po-input" || true
             gh pr comment "$PR_NUMBER" -R "$REPO" --body "<!-- pr-review-verdict -->
           ⚠️ **PR Review Escalation:** Reached maximum automated review/fix rounds ($ROUND_CAP). Marking \`status:needs-po-input\` for human review."
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "merge_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "merge_only=false" >> "$GITHUB_OUTPUT"
 
       - name: Checkout PR branch
-        if: steps.meta.outputs.skip != 'true'
+        if: steps.meta.outputs.skip != 'true' && steps.meta.outputs.merge_only != 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.meta.outputs.head_ref }}
@@ -81,13 +93,13 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python 3.11
-        if: steps.meta.outputs.skip != 'true'
+        if: steps.meta.outputs.skip != 'true' && steps.meta.outputs.merge_only != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install Python dependencies
-        if: steps.meta.outputs.skip != 'true'
+        if: steps.meta.outputs.skip != 'true' && steps.meta.outputs.merge_only != 'true'
         run: |
           pip install --upgrade pip
           pip install -r api_gateway/requirements.txt
@@ -95,7 +107,7 @@ jobs:
           pip install pytest httpx
 
       - name: Set up Node.js 20
-        if: steps.meta.outputs.skip != 'true' && hashFiles('web/package-lock.json') != ''
+        if: steps.meta.outputs.skip != 'true' && steps.meta.outputs.merge_only != 'true' && hashFiles('web/package-lock.json') != ''
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -103,19 +115,19 @@ jobs:
           cache-dependency-path: 'web/package-lock.json'
 
       - name: Install Frontend dependencies
-        if: steps.meta.outputs.skip != 'true' && hashFiles('web/package-lock.json') != ''
+        if: steps.meta.outputs.skip != 'true' && steps.meta.outputs.merge_only != 'true' && hashFiles('web/package-lock.json') != ''
         working-directory: web
         run: npm ci
 
       - name: Fetch PR context
-        if: steps.meta.outputs.skip != 'true'
+        if: steps.meta.outputs.skip != 'true' && steps.meta.outputs.merge_only != 'true'
         run: |
           set -euo pipefail
           gh pr view "$PR_NUMBER" -R "$REPO" --json number,title,body,url,headRefName,baseRefName,comments > pr_meta.json
           gh pr diff "$PR_NUMBER" -R "$REPO" > pr_diff.txt
 
       - name: Run PR Review & Auto-Fix (Claude Opus 5.5 High)
-        if: steps.meta.outputs.skip != 'true'
+        if: steps.meta.outputs.skip != 'true' && steps.meta.outputs.merge_only != 'true'
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
@@ -128,13 +140,25 @@ jobs:
           additional_permissions: |
             actions: read
 
-      - name: Commit auto-fixes, apply verdict, and auto-merge when green
-        if: steps.meta.outputs.skip != 'true' && steps.claude.outcome == 'success' && hashFiles('pr_review_output.json') != ''
+      - name: Commit auto-fixes, apply verdict, and prepare merge
+        id: verdict_step
+        if: steps.meta.outputs.skip != 'true' && (steps.meta.outputs.merge_only == 'true' || (steps.claude.outcome == 'success' && hashFiles('pr_review_output.json') != ''))
         env:
           HEAD_REF: ${{ steps.meta.outputs.head_ref }}
           INITIAL_SHA: ${{ steps.meta.outputs.head_sha }}
+          MERGE_ONLY: ${{ steps.meta.outputs.merge_only }}
         run: |
           set -euo pipefail
+
+          if [ "$MERGE_ONLY" = "true" ]; then
+            gh label create "review:approved" -R "$REPO" --color "0E8A16" --description "PR approved by automated Claude Opus review" --force || true
+            gh pr edit "$PR_NUMBER" -R "$REPO" --remove-label "review:changes-requested" || true
+            gh pr edit "$PR_NUMBER" -R "$REPO" --add-label "review:approved" || true
+            echo "verdict=APPROVED" >> "$GITHUB_OUTPUT"
+            echo "current_sha=$INITIAL_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           cp pr_review_output.json /tmp/pr_review_output.json
           rm -f pr_meta.json pr_diff.txt pr_review_output.json
 
@@ -151,14 +175,39 @@ jobs:
             FIX_PUSHED="true"
           fi
 
-          export FIX_PUSHED
-          python3 -c "
-          import json, subprocess, os
+          CURRENT_SHA=$(git rev-parse HEAD)
+          export FIX_PUSHED CURRENT_SHA
+          export PR_REVIEW_OUTPUT_PATH="/tmp/pr_review_output.json"
 
-          with open('/tmp/pr_review_output.json') as f:
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          LABEL_META = {
+              "review:approved": ("0E8A16", "PR approved by automated Claude Opus review"),
+              "review:changes-requested": ("D93F0B", "PR requires changes or CI remediation"),
+              "status:needs-po-input": ("B60205", "Escalated to Product Owner after max review rounds"),
+              "status:ready": ("0E8A16", "Story or subtask ready for Dev & Test implementation"),
+              "status:done": ("0E8A16", "All subtasks merged and parent story completed"),
+              "tech-debt": ("FBCA04", "Technical debt or non-blocking improvement"),
+          }
+
+          def ensure_label(repo: str, name: str) -> None:
+              color, desc = LABEL_META.get(name, ("FBCA04", f"Automated pipeline label {name}"))
+              subprocess.run(
+                  ['gh', 'label', 'create', name, '-R', repo, '--color', color, '--description', desc, '--force'],
+                  check=False,
+              )
+
+          output_path = os.environ.get('PR_REVIEW_OUTPUT_PATH', '/tmp/pr_review_output.json')
+          with open(output_path, encoding='utf-8') as f:
               data = json.load(f)
 
           verdict = data.get('verdict', 'CHANGES_REQUESTED')
+          if verdict not in ('APPROVED', 'CHANGES_REQUESTED'):
+              verdict = 'CHANGES_REQUESTED'
+
           repo = os.environ['REPO']
           pr_num = os.environ['PR_NUMBER']
           fix_pushed = os.environ.get('FIX_PUSHED') == 'true'
@@ -168,42 +217,99 @@ jobs:
           comment_body = f'<!-- pr-review-verdict -->\n### PR Review Verdict: **{verdict}**{fix_banner}\n\n{summary}'
           subprocess.run(['gh', 'pr', 'comment', pr_num, '-R', repo, '--body', comment_body], check=True)
 
-          subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--remove-label', 'review:approved'], check=False)
-          subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--remove-label', 'review:changes-requested'], check=False)
-
-          if verdict == 'APPROVED':
-              subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--add-label', 'review:approved'], check=True)
-          else:
-              subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--add-label', 'review:changes-requested'], check=True)
-
           for item in data.get('followup_backlog_issues', []):
               title = item.get('title', 'Followup issue')
               body = item.get('body', '')
-              labels = ','.join(item.get('labels', ['tech-debt']))
+              raw_labels = item.get('labels') or ['tech-debt']
+              for lbl in raw_labels:
+                  ensure_label(repo, lbl)
+              labels = ','.join(raw_labels)
               subprocess.run(['gh', 'issue', 'create', '-R', repo, '--title', title, '--body', body, '--label', labels], check=False)
-          "
 
-          VERDICT=$(jq -r '.verdict // "CHANGES_REQUESTED"' /tmp/pr_review_output.json)
-          if [ "$VERDICT" = "APPROVED" ]; then
-            echo "Verdict is APPROVED. Waiting for CI checks to pass before merging..."
-            sleep 8
-            for i in $(seq 1 30); do
-              BUILD_STATUS=$(gh run list -R "$REPO" -b "$HEAD_REF" -w "CI" -L 1 --json status,conclusion -q '.[0] | "\(.status):\(.conclusion)"' || echo "")
-              echo "CI status ($i/30): $BUILD_STATUS"
-              if [ "$BUILD_STATUS" = "completed:success" ]; then
-                break
-              elif [ "$BUILD_STATUS" = "completed:failure" ] || [ "$BUILD_STATUS" = "completed:cancelled" ]; then
-                echo "CI failed ($BUILD_STATUS). Aborting auto-merge."
-                exit 1
-              fi
-              sleep 10
-            done
+          subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--remove-label', 'review:approved'], check=False)
+          subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--remove-label', 'review:changes-requested'], check=False)
 
-            PR_STATE=$(gh pr view "$PR_NUMBER" -R "$REPO" --json state -q '.state')
-            if [ "$PR_STATE" = "OPEN" ]; then
-              gh pr merge "$PR_NUMBER" -R "$REPO" --squash --delete-branch
-              echo "Successfully squash-merged PR #$PR_NUMBER!"
-            else
-              echo "PR #$PR_NUMBER is already $PR_STATE."
+          target_label = 'review:approved' if verdict == 'APPROVED' else 'review:changes-requested'
+          ensure_label(repo, target_label)
+          subprocess.run(['gh', 'pr', 'edit', pr_num, '-R', repo, '--add-label', target_label], check=False)
+
+          gh_out = os.environ.get('GITHUB_OUTPUT')
+          if gh_out:
+              with open(gh_out, 'a', encoding='utf-8') as out_f:
+                  out_f.write(f"verdict={verdict}\n")
+                  out_f.write(f"current_sha={os.environ.get('CURRENT_SHA', '')}\n")
+          PY
+
+      - name: Wait for CI on target commit and auto-merge
+        id: merge_step
+        if: steps.meta.outputs.skip != 'true' && steps.verdict_step.outputs.verdict == 'APPROVED'
+        env:
+          CURRENT_SHA: ${{ steps.verdict_step.outputs.current_sha }}
+        run: |
+          set -euo pipefail
+          echo "Verdict is APPROVED. Waiting for CI checks on commit $CURRENT_SHA to pass before merging..."
+          sleep 8
+          CI_PASSED="false"
+          BUILD_STATUS="pending"
+          for i in $(seq 1 60); do
+            BUILD_STATUS=$(gh run list -R "$REPO" --commit "$CURRENT_SHA" -w "CI" -L 1 --json status,conclusion -q '.[0] | "\(.status):\(.conclusion)"' || echo "")
+            echo "CI status for $CURRENT_SHA ($i/60): ${BUILD_STATUS:-not_registered_yet}"
+            if [ "$BUILD_STATUS" = "completed:success" ]; then
+              CI_PASSED="true"
+              break
+            elif [ "$BUILD_STATUS" = "completed:failure" ] || [ "$BUILD_STATUS" = "completed:cancelled" ] || [ "$BUILD_STATUS" = "completed:timed_out" ]; then
+              echo "CI failed ($BUILD_STATUS) for commit $CURRENT_SHA."
+              break
             fi
+            sleep 10
+          done
+
+          if [ "$CI_PASSED" != "true" ]; then
+            echo "CI did not pass ($BUILD_STATUS) for commit $CURRENT_SHA. Transitioning PR to review:changes-requested."
+            gh label create "review:changes-requested" -R "$REPO" --color "D93F0B" --description "PR requires changes or CI remediation" --force || true
+            gh pr edit "$PR_NUMBER" -R "$REPO" --remove-label "review:approved" || true
+            gh pr edit "$PR_NUMBER" -R "$REPO" --add-label "review:changes-requested" || true
+            gh pr comment "$PR_NUMBER" -R "$REPO" --body "❌ **Auto-Merge Aborted:** CI workflow for commit \`$CURRENT_SHA\` finished with status \`${BUILD_STATUS:-timeout}\`. Label updated to \`review:changes-requested\`." || true
+            exit 1
           fi
+
+          PR_STATE=$(gh pr view "$PR_NUMBER" -R "$REPO" --json state -q '.state')
+          if [ "$PR_STATE" = "OPEN" ]; then
+            gh pr merge "$PR_NUMBER" -R "$REPO" --squash --delete-branch
+            echo "Successfully squash-merged PR #$PR_NUMBER!"
+          else
+            echo "PR #$PR_NUMBER is already $PR_STATE."
+          fi
+
+      - name: Close the parent story once every subtask is done
+        id: close_story_step
+        if: steps.meta.outputs.skip != 'true' && steps.verdict_step.outputs.verdict == 'APPROVED' && steps.merge_step.outcome == 'success'
+        run: |
+          set -euo pipefail
+
+          PR_BODY=$(gh pr view "$PR_NUMBER" -R "$REPO" --json body -q '.body')
+          SUBTASK=$(echo "$PR_BODY" | grep -oiP '(close[sd]?|fixe?[sd]?|resolve[sd]?)\s*:?\s*#\K[0-9]+' | head -1 || true)
+          if [ -z "${SUBTASK:-}" ]; then
+            echo "No linked subtask found in PR body — nothing to check."
+            exit 0
+          fi
+
+          STORY=$(gh api "repos/$REPO/issues/$SUBTASK/parent" -q .number 2>/dev/null || true)
+          if [ -z "${STORY:-}" ]; then
+            echo "Subtask #$SUBTASK has no parent story reference — nothing to check."
+            exit 0
+          fi
+
+          OPEN_SIBLINGS=$(gh api "repos/$REPO/issues/$STORY/sub_issues" \
+            -q '[.[] | select(.state=="open")] | length')
+
+          if [ "$OPEN_SIBLINGS" -gt 0 ]; then
+            echo "Story #$STORY still has $OPEN_SIBLINGS open subtask(s) — not closing yet."
+            exit 0
+          fi
+
+          gh label create "status:done" -R "$REPO" --color "0E8A16" --description "All subtasks merged and parent story completed" --force || true
+          gh issue comment "$STORY" -R "$REPO" --body "**All subtasks complete.** Every sub-issue linked to this story is now closed — the last one was #${SUBTASK}, merged via #${PR_NUMBER}. Closing this story."
+          gh issue edit "$STORY" -R "$REPO" --remove-label "status:ready" 2>/dev/null || true
+          gh issue edit "$STORY" -R "$REPO" --add-label "status:done"
+          gh issue close "$STORY" -R "$REPO"

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Automated PR Review Auto-Merge, Self-Cancellation Prevention & Self-Healing Label Governance (`003-pr-review-automerge`)**:
+  - Updated `.github/workflows/pr-review.yml` to set `cancel-in-progress: false` on the per-PR concurrency group so pushing an `[skip pr-review]` auto-fix commit with `ORCHESTRATION_PAT` queues behind the active workflow run instead of cancelling it mid-merge.
+  - Added a zero-token `merge_only=true` fast-path in `steps.meta` of `.github/workflows/pr-review.yml` when an open PR's latest commit contains `[skip pr-review]` and its most recent `<!-- pr-review-verdict -->` comment is `APPROVED`, enabling immediate recovery and auto-merge of already-reviewed PRs (such as PR #138) without re-invoking Claude Opus 5.5.
+  - Provisioned standard pipeline labels (`review:approved`, `review:changes-requested`, `status:needs-po-input`, `status:ready`, `status:done`, `tech-debt`) and added idempotent `gh label create ... --force` self-healing before applying labels to PRs, parent stories, or `followup_backlog_issues`.
+  - Scoped pre-merge CI polling strictly to `--commit "$CURRENT_SHA"` (60 attempts x 10s = 10 minutes max) with an explicit `CI_PASSED="true"` gate, transitioning the PR label to `review:changes-requested` with a diagnostic comment if CI fails or times out.
+  - Retired `.github/workflows/merge.yml` and consolidated post-merge parent-story closure into `.github/workflows/pr-review.yml`, eliminating duplicate merge workflow runs.
+  - Added deterministic offline workflow contract and helper tests in `strategy_engine/tests/test_pr_review_workflow.py` and amended `.specify/memory/constitution.md` to `v1.2.0`.
+
 ### Added
 - **Automated Claude Opus 5.5 (High Effort) PR Review, Auto-Fix & Squash-Merge Pipeline (.github/workflows/claude.yml, .github/workflows/pr-review.yml, .github/workflows/merge.yml)**:
   - Added .github/workflows/claude.yml (--model claude-opus-5-5 --effort high) so @claude mentions in Issues, Pull Requests, and PR Review Comments trigger interactive Claude Code sessions on GitHub.com.
