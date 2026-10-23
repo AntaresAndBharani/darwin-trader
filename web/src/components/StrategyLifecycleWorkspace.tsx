@@ -22,160 +22,160 @@ import {
 } from '../api/yahoo';
 import { computeHeikinAshi, HeikinAshiBar } from '../utils/heikinAshi';
 
+// Offline fallback mirroring `YAHOO_STRATEGY_CATALOG` in strategy_engine/yahoo_backtester.py
 const DEFAULT_STRATEGIES_FALLBACK: YahooStrategyDefinition[] = [
   {
     id: 'darwin_trend',
-    name: 'Darwin Trend (EMA Crossover + RSI + ATR)',
-    description:
-      'Dual EMA trend-following crossover with RSI momentum filter and ATR dynamic Stop-Loss / Take-Profit.',
+    name: 'Darwin Trend ATR',
+    description: 'EMA Trend Crossover + RSI Momentum + ATR Volatility Dynamic SL/TP.',
     parameters: [
       {
         key: 'fast_ema_period',
         label: 'Fast EMA Period',
         type: 'int',
-        default: 9,
-        min: 2,
-        max: 200,
+        default: 12,
+        min_value: 2,
+        max_value: 200,
         step: 1,
-        description: 'Fast Exponential Moving Average lookback window.',
+        description: 'Short-term exponential moving average lookback period.',
       },
       {
         key: 'slow_ema_period',
         label: 'Slow EMA Period',
         type: 'int',
-        default: 21,
-        min: 5,
-        max: 400,
+        default: 26,
+        min_value: 5,
+        max_value: 400,
         step: 1,
-        description: 'Slow Exponential Moving Average lookback window (must exceed Fast EMA).',
+        description: 'Long-term exponential moving average lookback period.',
       },
       {
         key: 'rsi_period',
         label: 'RSI Period',
         type: 'int',
         default: 14,
-        min: 2,
-        max: 100,
+        min_value: 2,
+        max_value: 100,
         step: 1,
-        description: 'Relative Strength Index period.',
+        description: 'Relative Strength Index lookback period.',
       },
       {
         key: 'rsi_overbought',
         label: 'RSI Overbought',
         type: 'float',
         default: 70.0,
-        min: 50.0,
-        max: 95.0,
+        min_value: 51.0,
+        max_value: 95.0,
         step: 1.0,
-        description: 'RSI overbought threshold blocking late long entries.',
+        description: 'Upper RSI threshold capping bullish entries.',
       },
       {
         key: 'rsi_oversold',
         label: 'RSI Oversold',
         type: 'float',
         default: 30.0,
-        min: 5.0,
-        max: 50.0,
+        min_value: 5.0,
+        max_value: 49.0,
         step: 1.0,
-        description: 'RSI oversold threshold blocking late short entries.',
+        description: 'Lower RSI threshold capping bearish entries.',
       },
       {
         key: 'atr_period',
         label: 'ATR Period',
         type: 'int',
         default: 14,
-        min: 2,
-        max: 100,
+        min_value: 2,
+        max_value: 100,
         step: 1,
-        description: 'Average True Range volatility period.',
+        description: 'Average True Range volatility lookback period.',
       },
       {
         key: 'atr_multiplier',
-        label: 'ATR SL Multiplier',
+        label: 'ATR Stop Multiplier',
         type: 'float',
         default: 2.0,
-        min: 0.5,
-        max: 10.0,
-        step: 0.25,
-        description: 'Stop-Loss distance in ATR multiples (Take-Profit = 1.5x Stop-Loss).',
+        min_value: 0.5,
+        max_value: 10.0,
+        step: 0.1,
+        description: 'Stop-loss distance in multiples of ATR (TP = 1.8x SL).',
       },
     ],
   },
   {
     id: 'darwinx_zero_trader',
-    name: 'DarwinX Zero Trader (Weekly HA + Quad-MA + 3-Stage Exit)',
+    name: 'DarwinX Zero Trader',
     description:
-      'Macro trend-reversal strategy combining Weekly Heikin-Ashi reversal confirmation, Quad Moving Average (EMA 21 / SMA 50 / 100 / 200) alignment, and 3-stage partial take-profit & breakeven management.',
+      'Multi-Timeframe 1W Heikin-Ashi Pullback-Reversal Filter with Quad-MA Trend Alignment and 3-Stage Position Lifecycle.',
     parameters: [
       {
         key: 'ema_period',
-        label: 'EMA Period',
+        label: 'Fast EMA Period',
         type: 'int',
         default: 21,
-        min: 5,
-        max: 200,
+        min_value: 2,
+        max_value: 150,
         step: 1,
-        description: 'Fast Exponential Moving Average period in the Quad-MA stack.',
+        description: 'Fast EMA period in the Quad-MA stack.',
       },
       {
         key: 'sma_fast_period',
         label: 'Fast SMA Period',
         type: 'int',
         default: 50,
-        min: 10,
-        max: 300,
-        step: 5,
-        description: 'Fast Simple Moving Average period in the Quad-MA stack.',
+        min_value: 5,
+        max_value: 250,
+        step: 1,
+        description: 'Fast SMA period in the Quad-MA stack.',
       },
       {
         key: 'sma_mid_period',
         label: 'Mid SMA Period',
         type: 'int',
         default: 100,
-        min: 20,
-        max: 400,
-        step: 5,
-        description: 'Medium Simple Moving Average period in the Quad-MA stack.',
+        min_value: 10,
+        max_value: 350,
+        step: 1,
+        description: 'Medium SMA period in the Quad-MA stack.',
       },
       {
         key: 'sma_slow_period',
-        label: 'Slow SMA Period',
+        label: 'Slow Baseline SMA Period',
         type: 'int',
         default: 200,
-        min: 50,
-        max: 500,
-        step: 10,
-        description: 'Long-term Simple Moving Average period in the Quad-MA stack.',
+        min_value: 20,
+        max_value: 500,
+        step: 5,
+        description: 'Anchor trend SMA period; price and all faster MAs must exceed this level.',
       },
       {
         key: 'stop_loss_pct',
-        label: 'Initial Stop-Loss (%)',
+        label: 'Stop Loss (%)',
         type: 'float',
         default: 10.0,
-        min: 1.0,
-        max: 50.0,
+        min_value: 0.5,
+        max_value: 50.0,
         step: 0.5,
-        description: 'Stage 1 protective stop-loss percentage from entry price.',
+        description: 'Initial protective stop-loss percentage below entry.',
       },
       {
         key: 'partial_tp_pct',
-        label: 'Stage 2 Partial TP (%)',
+        label: 'Partial Take Profit TP1 (%)',
         type: 'float',
         default: 5.0,
-        min: 1.0,
-        max: 50.0,
+        min_value: 0.5,
+        max_value: 100.0,
         step: 0.5,
-        description: 'Profit percentage trigger to scale out and move Stop-Loss to breakeven.',
+        description: 'First target gain percentage to scale out partial profit and ratchet stop to break-even.',
       },
       {
         key: 'partial_fraction',
-        label: 'Partial Close Fraction',
+        label: 'Partial Scale-Out Fraction',
         type: 'float',
         default: 0.5,
-        min: 0.1,
-        max: 0.9,
+        min_value: 0.1,
+        max_value: 0.9,
         step: 0.05,
-        description: 'Fraction of position volume closed at Stage 2 (0.50 = 50%).',
+        description: 'Fraction of position closed at TP1 (0.5 = 50%).',
       },
     ],
   },
@@ -264,7 +264,6 @@ export const StrategyLifecycleWorkspace: FC = () => {
       const [stratRes, tickerRes] = await Promise.all([
         yahooApi.getStrategies().catch(() => ({
           strategies: DEFAULT_STRATEGIES_FALLBACK,
-          shared_parameters: [],
         })),
         yahooApi.getTickers({ active_only: true }).catch(() => ({
           total: 0,
@@ -450,7 +449,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
     if (focusedAssetResult) return focusedAssetResult;
     if (!backtestResult || backtestResult.asset_results.length === 0) return null;
     return (
-      backtestResult.asset_results.find((a) => a.status === 'OK') ||
+      backtestResult.asset_results.find((a) => a.status === 'READY') ||
       backtestResult.asset_results[0]
     );
   }, [focusedAssetResult, backtestResult]);
@@ -573,13 +572,14 @@ export const StrategyLifecycleWorkspace: FC = () => {
       }
 
       const markers: SeriesMarker<Time>[] = [];
+      // Partial scale-outs share their entry with the final close; mark each entry once
+      const markedEntries = new Set<string>();
       for (const tr of priceChartAssetResult?.trades || []) {
-        const entryDay = tr.entry_time.slice(0, 10);
-        const exitDay = tr.exit_time.slice(0, 10);
-        const entryTs = dateToTime.get(entryDay);
-        const exitTs = dateToTime.get(exitDay);
+        const entryTs = dateToTime.get(tr.entry_date.slice(0, 10));
+        const exitTs = tr.exit_date ? dateToTime.get(tr.exit_date.slice(0, 10)) : undefined;
 
-        if (entryTs !== undefined) {
+        if (entryTs !== undefined && !markedEntries.has(tr.entry_date)) {
+          markedEntries.add(tr.entry_date);
           markers.push({
             time: entryTs,
             position: tr.type === 'BUY' ? 'belowBar' : 'aboveBar',
@@ -594,7 +594,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
             position: 'aboveBar',
             color: tr.pnl >= 0 ? '#34d399' : '#f87171',
             shape: 'circle',
-            text: `${tr.exit_reason} (${tr.pnl >= 0 ? '+' : ''}$${tr.pnl.toFixed(0)})`,
+            text: `${tr.reason} (${tr.pnl >= 0 ? '+' : ''}$${tr.pnl.toFixed(0)})`,
           });
         }
       }
@@ -1004,8 +1004,8 @@ export const StrategyLifecycleWorkspace: FC = () => {
                     id={`strategy-param-${param.key}`}
                     type="number"
                     data-testid={`strategy-param-${param.key}`}
-                    min={param.min ?? undefined}
-                    max={param.max ?? undefined}
+                    min={param.min_value ?? undefined}
+                    max={param.max_value ?? undefined}
                     step={param.step ?? 1}
                     value={strategyParams[param.key] ?? param.default}
                     onChange={(e) => handleParamChange(param.key, e.target.value, param.type)}
@@ -1056,7 +1056,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
                 >
                   {focusedAssetResult
                     ? `${focusedAssetResult.symbol} (${focusedAssetResult.name})`
-                    : `Portfolio Aggregate (${backtestResult.valid_assets}/${backtestResult.total_assets} Active Tickers)`}
+                    : `Portfolio Aggregate (${backtestResult.valid_symbols_count}/${backtestResult.total_symbols_requested} Active Tickers)`}
                 </span>
               </div>
               {focusedAssetResult && (
@@ -1173,13 +1173,12 @@ export const StrategyLifecycleWorkspace: FC = () => {
               </div>
 
               <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3 flex flex-col gap-1">
-                <span className="text-[11px] text-zinc-400">Sharpe / Sortino</span>
+                <span className="text-[11px] text-zinc-400">Sharpe Ratio</span>
                 <div
                   data-testid="kpi-sharpe-ratio"
                   className="text-base font-mono font-bold text-zinc-100"
                 >
-                  {activeMetrics.sharpe_ratio.toFixed(2)} /{' '}
-                  {activeMetrics.sortino_ratio.toFixed(2)}
+                  {activeMetrics.sharpe_ratio.toFixed(2)}
                 </div>
               </div>
 
@@ -1191,9 +1190,9 @@ export const StrategyLifecycleWorkspace: FC = () => {
                       <span
                         data-testid="kpi-latest-signal"
                         className={`text-xs font-mono font-bold px-2 py-0.5 rounded border ${
-                          priceChartAssetResult.latest_signal === 'BUY'
+                          priceChartAssetResult.latest_signal === 'ENTER_LONG'
                             ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
-                            : priceChartAssetResult.latest_signal === 'SELL'
+                            : priceChartAssetResult.latest_signal === 'ENTER_SHORT'
                               ? 'bg-rose-950 text-rose-300 border-rose-700'
                               : 'bg-zinc-800 text-zinc-300 border-zinc-700'
                         }`}
@@ -1368,7 +1367,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
                           <td className="py-2 px-2">
                             <span
                               className={`text-[10px] px-1.5 py-0.5 rounded ${
-                                ar.status === 'OK'
+                                ar.status === 'READY'
                                   ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60'
                                   : 'bg-amber-950 text-amber-300 border border-amber-800/60'
                               }`}
@@ -1376,7 +1375,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
                               {ar.status}
                             </span>
                           </td>
-                          <td className="py-2 px-2">{ar.total_bars}</td>
+                          <td className="py-2 px-2">{ar.bars_count}</td>
                           <td className="py-2 px-2">{ar.metrics.total_trades}</td>
                           <td className="py-2 px-2">
                             {ar.metrics.win_rate_pct.toFixed(1)}%
@@ -1411,9 +1410,9 @@ export const StrategyLifecycleWorkspace: FC = () => {
                           <td className="py-2 pl-2">
                             <span
                               className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
-                                ar.latest_signal === 'BUY'
+                                ar.latest_signal === 'ENTER_LONG'
                                   ? 'bg-emerald-950 text-emerald-300'
-                                  : ar.latest_signal === 'SELL'
+                                  : ar.latest_signal === 'ENTER_SHORT'
                                     ? 'bg-rose-950 text-rose-300'
                                     : 'bg-zinc-800 text-zinc-400'
                               }`}
@@ -1502,11 +1501,11 @@ export const StrategyLifecycleWorkspace: FC = () => {
                               {tr.type}
                             </span>
                           </td>
-                          <td className="py-1.5 px-2">{tr.entry_time.slice(0, 10)}</td>
-                          <td className="py-1.5 px-2">{tr.exit_time.slice(0, 10)}</td>
+                          <td className="py-1.5 px-2">{tr.entry_date}</td>
+                          <td className="py-1.5 px-2">{tr.exit_date ?? 'Open'}</td>
                           <td className="py-1.5 px-2">${tr.entry_price.toFixed(2)}</td>
                           <td className="py-1.5 px-2">${tr.exit_price.toFixed(2)}</td>
-                          <td className="py-1.5 px-2">{tr.volume.toFixed(2)}</td>
+                          <td className="py-1.5 px-2">{tr.units.toFixed(2)}</td>
                           <td
                             className={`py-1.5 px-2 font-semibold ${
                               tr.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'
@@ -1523,7 +1522,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
                           </td>
                           <td className="py-1.5 px-2">
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700">
-                              {tr.exit_reason}
+                              {tr.reason}
                             </span>
                           </td>
                           <td className="py-1.5 pl-2">

@@ -124,8 +124,8 @@ export interface StrategyParameterSpec {
   label: string;
   type: 'int' | 'float' | 'select';
   default: number | string;
-  min?: number | null;
-  max?: number | null;
+  min_value?: number | null;
+  max_value?: number | null;
   step?: number | null;
   options?: string[] | null;
   description: string;
@@ -140,7 +140,6 @@ export interface YahooStrategyDefinition {
 
 export interface YahooStrategiesListResponse {
   strategies: YahooStrategyDefinition[];
-  shared_parameters: StrategyParameterSpec[];
 }
 
 export interface YahooBacktestRequest {
@@ -158,18 +157,19 @@ export interface YahooBacktestRequest {
 
 export interface YahooTradeRecord {
   symbol: string;
-  entry_time: string;
-  exit_time: string;
   type: 'BUY' | 'SELL';
+  stage: 'FULL' | 'PARTIAL' | 'CLOSED';
+  entry_date: string;
+  entry_time: number;
   entry_price: number;
+  exit_date: string | null;
+  exit_time: number | null;
   exit_price: number;
-  stop_loss: number;
-  take_profit: number;
-  volume: number;
+  units: number;
   pnl: number;
   pnl_pct: number;
-  exit_reason: string;
   balance_after: number;
+  reason: string;
 }
 
 export interface YahooEquityPoint {
@@ -182,7 +182,6 @@ export interface YahooEquityPoint {
 
 export interface YahooBacktestSummaryMetrics {
   initial_balance: number;
-  final_balance: number;
   final_equity: number;
   net_profit: number;
   net_profit_pct: number;
@@ -198,21 +197,21 @@ export interface YahooBacktestSummaryMetrics {
   max_drawdown: number;
   max_drawdown_pct: number;
   sharpe_ratio: number;
-  sortino_ratio: number;
 }
+
+export type YahooLatestSignal = 'ENTER_LONG' | 'ENTER_SHORT' | 'HOLD' | 'NO_DATA';
 
 export interface YahooAssetBacktestResult {
   symbol: string;
   name: string;
   market: string;
   sector: string;
-  timeframe: string;
-  total_bars: number;
-  status: 'OK' | 'NO_DATA';
-  message?: string | null;
-  latest_signal: 'BUY' | 'SELL' | 'HOLD';
+  status: 'READY' | 'NO_DATA' | 'INSUFFICIENT_DATA';
+  bars_count: number;
+  effective_from_date: string | null;
+  effective_to_date: string | null;
+  latest_signal: YahooLatestSignal;
   latest_signal_reason: string;
-  open_position?: Record<string, unknown> | null;
   metrics: YahooBacktestSummaryMetrics;
   equity_curve: YahooEquityPoint[];
   bars: YahooPriceBar[];
@@ -223,9 +222,11 @@ export interface YahooPortfolioBacktestResponse {
   strategy_id: string;
   strategy_name: string;
   timeframe: string;
+  from_date: string | null;
+  to_date: string | null;
   applied_params: Record<string, number | string>;
-  total_assets: number;
-  valid_assets: number;
+  total_symbols_requested: number;
+  valid_symbols_count: number;
   portfolio_metrics: YahooBacktestSummaryMetrics;
   portfolio_equity_curve: YahooEquityPoint[];
   asset_results: YahooAssetBacktestResult[];

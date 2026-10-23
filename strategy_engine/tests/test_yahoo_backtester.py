@@ -297,3 +297,37 @@ def test_multi_asset_and_sector_portfolio_backtest(temp_yahoo_db):
     )
     assert sector_res["total_symbols_requested"] == 3
     assert sector_res["valid_symbols_count"] == 2
+
+
+def test_portfolio_keeps_idle_capital_for_symbols_without_in_range_bars(temp_yahoo_db):
+    """
+    A symbol whose stored data brackets the requested window (passing the pre-allocation
+    range check) but has no bars inside it still receives `capital_k`; that capital must stay
+    in the portfolio equity curve as idle cash instead of vanishing as a phantom drawdown.
+    """
+    _seed_synthetic_stock_history(temp_yahoo_db, symbol="AAPL", days=180)
+    _seed_synthetic_stock_history(temp_yahoo_db, symbol="GAPPY", days=5, start_date=date(2024, 1, 2))
+    _seed_synthetic_stock_history(temp_yahoo_db, symbol="GAPPY", days=5, start_date=date(2024, 12, 2))
+
+    port_res = run_yahoo_portfolio_backtest(
+        db=temp_yahoo_db,
+        strategy_id="darwin_trend",
+        symbols=["AAPL", "GAPPY"],
+        timeframe="D1",
+        from_date="2024-03-01",
+        to_date="2024-06-28",
+        initial_balance=100000.0,
+        risk_per_trade_pct=10.0,
+    )
+
+    by_sym = {r["symbol"]: r for r in port_res["asset_results"]}
+    assert by_sym["AAPL"]["status"] == "READY"
+    assert by_sym["GAPPY"]["status"] == "NO_DATA"
+    assert by_sym["AAPL"]["metrics"]["initial_balance"] == pytest.approx(50000.0)
+
+    curve = port_res["portfolio_equity_curve"]
+    pm = port_res["portfolio_metrics"]
+    assert pm["initial_balance"] == pytest.approx(100000.0)
+    assert curve[0]["equity"] == pytest.approx(100000.0, abs=1.0)
+    assert pm["final_equity"] == pytest.approx(curve[-1]["equity"], abs=0.05)
+    assert pm["max_drawdown_pct"] < 50.0

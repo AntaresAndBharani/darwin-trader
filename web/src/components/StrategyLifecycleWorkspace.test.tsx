@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { createSeriesMarkers } from 'lightweight-charts';
 import { StrategyLifecycleWorkspace } from './StrategyLifecycleWorkspace';
 import { yahooApi, YahooPortfolioBacktestResponse } from '../api/yahoo';
 import { mockSeries, mockSeriesMarkers } from '../test/setup';
@@ -42,11 +43,12 @@ const mockSingleBacktestResponse: YahooPortfolioBacktestResponse = {
     slow_ema_period: 26,
     rsi_period: 14,
   },
-  total_assets: 1,
-  valid_assets: 1,
+  from_date: '2024-01-01',
+  to_date: '2024-01-02',
+  total_symbols_requested: 1,
+  valid_symbols_count: 1,
   portfolio_metrics: {
     initial_balance: 10000,
-    final_balance: 11250,
     final_equity: 11400,
     net_profit: 1400,
     net_profit_pct: 14.0,
@@ -62,7 +64,6 @@ const mockSingleBacktestResponse: YahooPortfolioBacktestResponse = {
     max_drawdown: 220,
     max_drawdown_pct: 2.1,
     sharpe_ratio: 1.85,
-    sortino_ratio: 2.4,
   },
   portfolio_equity_curve: [
     { time: 1704067200, date: '2024-01-01', balance: 10000, equity: 10000, drawdown_pct: 0 },
@@ -74,14 +75,14 @@ const mockSingleBacktestResponse: YahooPortfolioBacktestResponse = {
       name: 'Apple Inc.',
       market: 'NASDAQ',
       sector: 'Technology',
-      timeframe: 'D1',
-      total_bars: 250,
-      status: 'OK',
-      latest_signal: 'BUY',
+      status: 'READY',
+      bars_count: 250,
+      effective_from_date: '2024-01-01',
+      effective_to_date: '2024-01-02',
+      latest_signal: 'ENTER_LONG',
       latest_signal_reason: 'Bullish EMA Crossover (Fast=185.20 > Slow=182.10, RSI=58.4)',
       metrics: {
         initial_balance: 10000,
-        final_balance: 11250,
         final_equity: 11400,
         net_profit: 1400,
         net_profit_pct: 14.0,
@@ -97,7 +98,6 @@ const mockSingleBacktestResponse: YahooPortfolioBacktestResponse = {
         max_drawdown: 220,
         max_drawdown_pct: 2.1,
         sharpe_ratio: 1.85,
-        sortino_ratio: 2.4,
       },
       equity_curve: [
         { time: 1704067200, date: '2024-01-01', balance: 10000, equity: 10000, drawdown_pct: 0 },
@@ -126,18 +126,35 @@ const mockSingleBacktestResponse: YahooPortfolioBacktestResponse = {
       trades: [
         {
           symbol: 'AAPL',
-          entry_time: '2024-01-01',
-          exit_time: '2024-01-02',
           type: 'BUY',
+          stage: 'CLOSED',
+          entry_date: '2024-01-01',
+          entry_time: 1704067200,
           entry_price: 180.0,
+          exit_date: '2024-01-02',
+          exit_time: 1704153600,
           exit_price: 190.0,
-          stop_loss: 172.0,
-          take_profit: 192.0,
-          volume: 125.0,
+          units: 125.0,
           pnl: 1250.0,
           pnl_pct: 12.5,
-          exit_reason: 'TAKE_PROFIT',
           balance_after: 11250.0,
+          reason: 'Take Profit Hit',
+        },
+        {
+          symbol: 'AAPL',
+          type: 'BUY',
+          stage: 'FULL',
+          entry_date: '2024-01-02',
+          entry_time: 1704153600,
+          entry_price: 188.5,
+          exit_date: null,
+          exit_time: null,
+          exit_price: 190.0,
+          units: 100.0,
+          pnl: 150.0,
+          pnl_pct: 0.8,
+          balance_after: 11400.0,
+          reason: 'Open Position (Marked to Market)',
         },
       ],
     },
@@ -146,8 +163,8 @@ const mockSingleBacktestResponse: YahooPortfolioBacktestResponse = {
 
 const mockBatchBacktestResponse: YahooPortfolioBacktestResponse = {
   ...mockSingleBacktestResponse,
-  total_assets: 2,
-  valid_assets: 2,
+  total_symbols_requested: 2,
+  valid_symbols_count: 2,
   portfolio_metrics: {
     ...mockSingleBacktestResponse.portfolio_metrics,
     net_profit: 2200,
@@ -165,7 +182,6 @@ const mockBatchBacktestResponse: YahooPortfolioBacktestResponse = {
       metrics: {
         ...mockSingleBacktestResponse.asset_results[0].metrics,
         initial_balance: 5000,
-        final_balance: 5800,
         final_equity: 5800,
         net_profit: 800,
         net_profit_pct: 16.0,
@@ -173,18 +189,19 @@ const mockBatchBacktestResponse: YahooPortfolioBacktestResponse = {
       trades: [
         {
           symbol: 'MSFT',
-          entry_time: '2024-01-01',
-          exit_time: '2024-01-02',
           type: 'BUY',
+          stage: 'CLOSED',
+          entry_date: '2024-01-01',
+          entry_time: 1704067200,
           entry_price: 370.0,
+          exit_date: '2024-01-02',
+          exit_time: 1704153600,
           exit_price: 386.0,
-          stop_loss: 350.0,
-          take_profit: 400.0,
-          volume: 50.0,
+          units: 50.0,
           pnl: 800.0,
           pnl_pct: 16.0,
-          exit_reason: 'TAKE_PROFIT',
           balance_after: 5800.0,
+          reason: 'Take Profit Hit',
         },
       ],
     },
@@ -200,7 +217,6 @@ describe('StrategyLifecycleWorkspace', () => {
     vi.spyOn(yahooApi, 'getTickers').mockResolvedValue(mockTickersResponse);
     vi.spyOn(yahooApi, 'getStrategies').mockResolvedValue({
       strategies: [],
-      shared_parameters: [],
     });
   });
 
@@ -214,7 +230,7 @@ describe('StrategyLifecycleWorkspace', () => {
 
     // Verify Darwin Trend parameters are rendered by default
     const fastEmaInput = screen.getByTestId('strategy-param-fast_ema_period') as HTMLInputElement;
-    expect(fastEmaInput.value).toBe('9');
+    expect(fastEmaInput.value).toBe('12');
 
     // Edit Fast EMA and Initial Balance
     fireEvent.change(fastEmaInput, { target: { value: '15' } });
@@ -278,7 +294,8 @@ describe('StrategyLifecycleWorkspace', () => {
     expect(screen.getByTestId('kpi-final-equity')).toHaveTextContent('$11,400.00');
     expect(screen.getByTestId('kpi-win-rate')).toHaveTextContent('75.0%');
     expect(screen.getByTestId('kpi-profit-factor')).toHaveTextContent('3.10');
-    expect(screen.getByTestId('kpi-latest-signal')).toHaveTextContent('BUY');
+    expect(screen.getByTestId('kpi-latest-signal')).toHaveTextContent('ENTER_LONG');
+    expect(screen.getByTestId('kpi-sharpe-ratio')).toHaveTextContent('1.85');
 
     // Verify Equity Curve was plotted on chart
     expect(mockSeries.setData).toHaveBeenCalledWith([
@@ -301,8 +318,17 @@ describe('StrategyLifecycleWorkspace', () => {
     fireEvent.click(screen.getByTestId('strategy-chart-ha-toggle'));
     expect(screen.getByTestId('strategy-chart-ha-toggle')).toHaveTextContent('Heikin-Ashi: ON');
 
-    // Verify Trade Execution Log renders the AAPL trade
-    expect(screen.getByTestId('strategy-trade-log-table')).toHaveTextContent('TAKE_PROFIT');
+    // Entry markers for both trades plus an exit marker only for the closed one
+    const markerCalls = vi.mocked(createSeriesMarkers).mock.calls;
+    const latestMarkers = markerCalls[markerCalls.length - 1][1] as Array<{ shape: string }>;
+    expect(latestMarkers.filter((m) => m.shape === 'arrowUp')).toHaveLength(2);
+    expect(latestMarkers.filter((m) => m.shape === 'circle')).toHaveLength(1);
+
+    // Verify Trade Execution Log renders the closed AAPL trade and the still-open position
+    const tradeLog = screen.getByTestId('strategy-trade-log-table');
+    expect(tradeLog).toHaveTextContent('Take Profit Hit');
+    expect(tradeLog).toHaveTextContent('Open Position (Marked to Market)');
+    expect(tradeLog).toHaveTextContent('Open');
   });
 
   it('supports Multi-Asset batch backtesting and drills down into a clicked ticker row in the comparison table', async () => {
@@ -323,7 +349,7 @@ describe('StrategyLifecycleWorkspace', () => {
     await waitFor(() => {
       expect(runBacktestSpy).toHaveBeenCalled();
       expect(screen.getByTestId('strategy-active-scope-label')).toHaveTextContent(
-        'Portfolio Aggregate',
+        'Portfolio Aggregate (2/2 Active Tickers)',
       );
       expect(screen.getByTestId('kpi-net-profit')).toHaveTextContent('$2,200.00');
     });

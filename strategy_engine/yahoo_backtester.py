@@ -318,8 +318,8 @@ def enrich_weekly_heikin_ashi(
     """
     df = bars_df.copy()
     if df.empty or len(weekly_bars) < 2:
-        df["w1_ha_color_prev1"] = None
-        df["w1_ha_color_prev2"] = None
+        df["w1_ha_color_prev1"] = pd.Series([None] * len(df), index=df.index, dtype=object)
+        df["w1_ha_color_prev2"] = pd.Series([None] * len(df), index=df.index, dtype=object)
         return df
 
     w_df = pd.DataFrame(weekly_bars)
@@ -358,8 +358,9 @@ def enrich_weekly_heikin_ashi(
             prev1_list.append(None)
             prev2_list.append(None)
 
-    df["w1_ha_color_prev1"] = prev1_list
-    df["w1_ha_color_prev2"] = prev2_list
+    # Explicit object dtype keeps `None` sentinels intact (pandas 3 string inference coerces them to NaN)
+    df["w1_ha_color_prev1"] = pd.Series(prev1_list, index=df.index, dtype=object)
+    df["w1_ha_color_prev2"] = pd.Series(prev2_list, index=df.index, dtype=object)
     return df
 
 
@@ -1135,7 +1136,7 @@ def run_yahoo_portfolio_backtest(
             "asset_results": asset_results,
         }
 
-    if len(ready_results) == 1:
+    if len(ready_results) == 1 and valid_count == 1:
         single = ready_results[0]
         return {
             "strategy_id": strategy_id,
@@ -1179,8 +1180,10 @@ def run_yahoo_portfolio_backtest(
         eq_df[sym] = s_eq.reindex(union_index).ffill().fillna(cap_k)
         bal_df[sym] = s_bal.reindex(union_index).ffill().fillna(cap_k)
 
-    port_eq_series = eq_df.sum(axis=1)
-    port_bal_series = bal_df.sum(axis=1)
+    # Capital allocated to symbols that produced no in-range bars stays idle as cash
+    idle_capital = float(initial_balance) - capital_per_symbol * len(ready_results)
+    port_eq_series = eq_df.sum(axis=1) + idle_capital
+    port_bal_series = bal_df.sum(axis=1) + idle_capital
 
     portfolio_equity_curve: List[Dict[str, Any]] = []
     peak_eq = float(initial_balance)

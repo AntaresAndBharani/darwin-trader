@@ -75,7 +75,6 @@ describe('App', () => {
     });
     vi.spyOn(yahooApi, 'getStrategies').mockResolvedValue({
       strategies: [],
-      shared_parameters: [],
     });
   });
 
