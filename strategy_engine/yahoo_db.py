@@ -599,8 +599,7 @@ class YahooFinanceDB:
                     current_bar["low"] = l_val
                 current_bar["close"] = c
                 current_bar["volume"] += vol
-                current_bar["date"] = d_str
-                current_bar["time"] = _date_to_utc_timestamp(d_str)
+                # `time`/`date` stay anchored to the bucket's first trading day (bar open time)
 
         if current_bar is not None:
             buckets.append(current_bar)

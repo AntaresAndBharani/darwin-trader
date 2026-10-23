@@ -119,6 +119,8 @@ export interface YahooSyncPayload {
   workers?: number;
 }
 
+export const YAHOO_SYNC_TIMEOUT_MS = 120000;
+
 export const yahooApi = {
   getTickers: async (params: YahooTickerFilterParams = {}): Promise<YahooTickersListResponse> => {
     const res = await apiClient.get<YahooTickersListResponse>('/yahoo/tickers', { params });
@@ -170,7 +172,11 @@ export const yahooApi = {
   },
 
   triggerSync: async (payload: YahooSyncPayload = {}): Promise<YahooSyncStatusResponse> => {
-    const res = await apiClient.post<YahooSyncStatusResponse>('/yahoo/sync', payload);
+    // Single-ticker syncs run synchronously on the gateway (full history download for new
+    // tickers), so allow more than the default client timeout.
+    const res = await apiClient.post<YahooSyncStatusResponse>('/yahoo/sync', payload, {
+      timeout: YAHOO_SYNC_TIMEOUT_MS,
+    });
     return res.data;
   },
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { apiClient } from './client';
-import { yahooApi } from './yahoo';
+import { yahooApi, YAHOO_SYNC_TIMEOUT_MS } from './yahoo';
 
 describe('yahooApi', () => {
   beforeEach(() => {
@@ -121,7 +121,11 @@ describe('yahooApi', () => {
     expect(fund.symbol).toBe('AAPL');
 
     const syncRes = await yahooApi.triggerSync({ symbol: 'AAPL' });
-    expect(postSpy).toHaveBeenCalledWith('/yahoo/sync', { symbol: 'AAPL' });
+    expect(postSpy).toHaveBeenCalledWith(
+      '/yahoo/sync',
+      { symbol: 'AAPL' },
+      { timeout: YAHOO_SYNC_TIMEOUT_MS },
+    );
     expect(syncRes.status).toBe('COMPLETED');
 
     const statusRes = await yahooApi.getSyncStatus();

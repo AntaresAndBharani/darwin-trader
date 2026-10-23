@@ -208,10 +208,46 @@ describe('YahooWorkspace', () => {
       expect(updateSpy).toHaveBeenCalledWith('AAPL', { active: false });
     });
 
-    // Delete ticker
+    // Delete ticker requires confirmation; cancelling must not delete
     fireEvent.click(screen.getByTestId('yahoo-delete-ticker-btn'));
+    expect(screen.getByTestId('confirm-modal-prompt')).toHaveTextContent('Delete AAPL');
+    fireEvent.click(screen.getByTestId('confirm-modal-cancel'));
+    expect(screen.queryByTestId('confirm-modal')).not.toBeInTheDocument();
+    expect(deleteSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('yahoo-delete-ticker-btn'));
+    fireEvent.click(screen.getByTestId('confirm-modal-confirm'));
     await waitFor(() => {
       expect(deleteSpy).toHaveBeenCalledWith('AAPL');
     });
+    await waitFor(() => {
+      expect(screen.queryByTestId('confirm-modal')).not.toBeInTheDocument();
+    });
+  });
+
+  it('surfaces a failed single-ticker sync immediately without polling', async () => {
+    vi.spyOn(yahooApi, 'triggerSync').mockResolvedValue({
+      status: 'FAILED',
+      total_tickers: 1,
+      completed_tickers: 0,
+      failed_tickers: 1,
+      rows_upserted: 0,
+      valuations_upserted: 0,
+      message: 'Synced 0/1 ticker(s)',
+    });
+    const statusSpy = vi.spyOn(yahooApi, 'getSyncStatus');
+
+    render(<YahooWorkspace />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('yahoo-selected-symbol-heading')).toHaveTextContent('NASDAQ:AAPL');
+    });
+
+    fireEvent.click(screen.getByTestId('yahoo-sync-ticker-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('yahoo-error-banner')).toHaveTextContent('Synced 0/1 ticker(s)');
+    });
+    expect(screen.getByTestId('yahoo-sync-ticker-btn')).not.toBeDisabled();
+    expect(statusSpy).not.toHaveBeenCalled();
   });
 });

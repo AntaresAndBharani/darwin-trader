@@ -122,6 +122,9 @@ def test_yahoo_db_stock_prices_and_resampling(tmp_path):
     assert w1_bars[0]["low"] == 99.0
     assert w1_bars[0]["close"] == 107.0
     assert w1_bars[0]["volume"] == 2500
+    # Resampled bars are anchored to the first trading day of the bucket
+    assert w1_bars[0]["date"] == "2024-01-02"
+    assert w1_bars[0]["time"] == d1_bars[0]["time"]
 
     # MN1 history (2 distinct months: Jan & Feb 2024)
     mn1_bars, mn1_total = db.get_price_history("AAPL", timeframe="MN1")
@@ -131,6 +134,8 @@ def test_yahoo_db_stock_prices_and_resampling(tmp_path):
     assert mn1_bars[0]["low"] == 99.0
     assert mn1_bars[0]["close"] == 109.0
     assert mn1_bars[0]["volume"] == 4500
+    assert mn1_bars[0]["date"] == "2024-01-02"
+    assert mn1_bars[1]["date"] == "2024-02-01"
     assert mn1_bars[1]["close"] == 114.0
 
     with pytest.raises(ValueError, match="Unsupported timeframe"):

@@ -15,6 +15,7 @@ import {
   YahooFundamentalsResponse,
 } from '../api/yahoo';
 import { computeHeikinAshi, HeikinAshiBar } from '../utils/heikinAshi';
+import { ConfirmModal } from './ConfirmModal';
 
 function formatCompactCurrency(val: number | null | undefined): string {
   if (val == null || Number.isNaN(val)) return '—';
@@ -63,11 +64,14 @@ export const YahooWorkspace: FC = () => {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDeleteSymbol, setPendingDeleteSymbol] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
 
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const pollTimerRef = useRef<number | null>(null);
+  const detailRequestIdRef = useRef<number>(0);
 
   const loadTickers = useCallback(
     async (preserveSelection?: string) => {
@@ -105,6 +109,8 @@ export const YahooWorkspace: FC = () => {
   );
 
   const loadSymbolDetail = useCallback(async (sym: string, tf: string) => {
+    // Ignore responses from superseded requests when the user switches tickers quickly
+    const requestId = ++detailRequestIdRef.current;
     if (!sym) {
       setBars([]);
       setFundamentals(null);
@@ -117,12 +123,16 @@ export const YahooWorkspace: FC = () => {
         yahooApi.getHistory(sym, tf),
         yahooApi.getFundamentals(sym),
       ]);
+      if (requestId !== detailRequestIdRef.current) return;
       setBars(histRes.bars || []);
       setFundamentals(fundRes);
     } catch (err: unknown) {
+      if (requestId !== detailRequestIdRef.current) return;
       setError(err instanceof Error ? err.message : `Failed to load data for ${sym}`);
     } finally {
-      setIsLoadingDetail(false);
+      if (requestId === detailRequestIdRef.current) {
+        setIsLoadingDetail(false);
+      }
     }
   }, []);
 
@@ -171,9 +181,8 @@ export const YahooWorkspace: FC = () => {
   }, [marketFilter, sectorFilter, industryFilter, activeOnly, searchQuery]);
 
   useEffect(() => {
-    if (selectedSymbol) {
-      loadSymbolDetail(selectedSymbol, timeframe);
-    }
+    // Also runs with an empty symbol so the chart/fundamentals clear when no ticker is selected
+    loadSymbolDetail(selectedSymbol, timeframe);
   }, [selectedSymbol, timeframe, loadSymbolDetail]);
 
   // Update chart series when bars or Heikin-Ashi toggle changes
@@ -234,16 +243,23 @@ export const YahooWorkspace: FC = () => {
     }
   };
 
-  const handleDeleteTicker = async (symbolToDelete: string) => {
+  const handleConfirmDeleteTicker = async () => {
+    const symbolToDelete = pendingDeleteSymbol;
     if (!symbolToDelete) return;
+    setIsDeleting(true);
     setError(null);
     try {
       await yahooApi.deleteTicker(symbolToDelete);
       await loadTickers();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to delete ticker');
+    } finally {
+      setIsDeleting(false);
+      setPendingDeleteSymbol(null);
     }
   };
+
+  const handleCancelDeleteTicker = useCallback(() => setPendingDeleteSymbol(null), []);
 
   const handleSyncSymbol = async (sym?: string) => {
     setIsSyncing(true);
@@ -252,6 +268,11 @@ export const YahooWorkspace: FC = () => {
     try {
       const res = await yahooApi.triggerSync(sym ? { symbol: sym } : {});
       setSyncMessage(res.message);
+      if (res.status === 'FAILED') {
+        setIsSyncing(false);
+        setError(res.message || 'Yahoo Finance sync failed');
+        return;
+      }
       if (res.status === 'COMPLETED') {
         setIsSyncing(false);
         await loadTickers(sym || selectedSymbol);
@@ -587,7 +608,7 @@ export const YahooWorkspace: FC = () => {
                     <button
                       type="button"
                       data-testid="yahoo-delete-ticker-btn"
-                      onClick={() => handleDeleteTicker(activeTickerObj.symbol)}
+                      onClick={() => setPendingDeleteSymbol(activeTickerObj.symbol)}
                       className="px-2.5 py-1 rounded text-xs font-semibold bg-rose-950/60 border border-rose-800 text-rose-300 hover:bg-rose-900/60 transition-colors cursor-pointer"
                     >
                       Delete
@@ -756,6 +777,18 @@ export const YahooWorkspace: FC = () => {
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={pendingDeleteSymbol !== null}
+        title="Delete Ticker"
+        prompt={`Delete ${pendingDeleteSymbol ?? ''} and all of its stored OHLCV bars and valuation history? This cannot be undone.`}
+        confirmText="Delete Ticker"
+        cancelText="Cancel"
+        isDanger={true}
+        isLoading={isDeleting}
+        onConfirm={handleConfirmDeleteTicker}
+        onCancel={handleCancelDeleteTicker}
+      />
     </div>
   );
 };

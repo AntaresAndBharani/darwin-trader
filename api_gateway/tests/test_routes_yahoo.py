@@ -208,3 +208,35 @@ def test_yahoo_sync_and_conflict(monkeypatch):
     routes_yahoo._sync_state["status"] = "IN_PROGRESS"
     res_conflict = client.post("/api/v1/yahoo/sync", json={"symbol": "AAPL"})
     assert res_conflict.status_code == 409
+
+
+def test_yahoo_batch_sync_runs_in_background(monkeypatch):
+    calls = []
+
+    def _fake_sync(**kwargs):
+        calls.append(kwargs)
+        return {
+            "total_symbols": 2,
+            "completed_symbols": 1,
+            "failed_symbols": ["SAN"],
+            "upserted_prices": 5,
+            "upserted_valuations": 1,
+            "updated_metadata": 0,
+        }
+
+    monkeypatch.setattr(routes_yahoo, "sync_yahoo_tickers", _fake_sync)
+
+    res = client.post("/api/v1/yahoo/sync", json={"workers": 3})
+    assert res.status_code == 202
+    assert res.json()["status"] == "IN_PROGRESS"
+
+    # TestClient executes background tasks before returning
+    assert len(calls) == 1
+    assert calls[0]["symbols"] is None
+    assert calls[0]["workers"] == 3
+
+    status = client.get("/api/v1/yahoo/sync/status").json()
+    assert status["status"] == "COMPLETED"
+    assert status["completed_tickers"] == 1
+    assert status["failed_tickers"] == 1
+    assert status["rows_upserted"] == 5

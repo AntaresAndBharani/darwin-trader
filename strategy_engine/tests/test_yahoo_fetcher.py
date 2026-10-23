@@ -147,6 +147,28 @@ def test_fetch_ohlcv_metadata_and_valuation():
     assert parse_valuation_measures("AAPL", "No data available") == []
 
 
+def test_fetch_ohlcv_does_not_backfill_current_revenue_onto_history():
+    class HistoricalBarsTicker(FakeYahooTicker):
+        def history(self, start=None, end=None, interval="1d"):
+            df = super().history(start=start, end=end, interval=interval)
+            older = df.iloc[[0]].copy()
+            older["date"] = "2026-02-02"
+            return pd.concat([older, df], ignore_index=True)
+
+    prices = fetch_ticker_ohlcv_and_earnings(
+        "AAPL",
+        start_date="2026-01-01",
+        end_date="2026-04-15",
+        ticker_factory=lambda sym: HistoricalBarsTicker(sym),
+    )
+    assert [p["date"] for p in prices] == ["2026-02-02", "2026-04-10", "2026-04-13"]
+    # Bar before the latest reported quarter keeps its as-of EPS but no current revenue
+    assert prices[0]["quarterly_eps"] == pytest.approx(2.40)
+    assert prices[0]["quarterly_revenue"] is None
+    assert prices[1]["quarterly_revenue"] == pytest.approx(391035000000.0)
+    assert prices[2]["quarterly_revenue"] == pytest.approx(391035000000.0)
+
+
 def test_sync_yahoo_tickers(tmp_path):
     db = YahooFinanceDB(db_path=str(tmp_path / "yahoo_sync_test.db"))
     factory = lambda sym: FakeYahooTicker(sym)
@@ -264,6 +286,25 @@ def test_migrate_postgres_to_sqlite_and_cli(tmp_path, monkeypatch):
         conn_factory=lambda **_kwargs: FakePGConn(),
     )
     assert counts == {"tickers": 2, "stock_prices": 1, "valuation_history": 1}
+
+    # Connections supporting named (server-side) cursors stream the large tables
+    named_cursors = []
+
+    class FakeNamedCursorPGConn(FakePGConn):
+        def cursor(self, name=None):
+            if name is not None:
+                named_cursors.append(name)
+            return FakeCursor()
+
+    counts_streamed = migrate_postgres_to_sqlite(
+        db=db,
+        conn_factory=lambda **_kwargs: FakeNamedCursorPGConn(),
+    )
+    assert counts_streamed == counts
+    assert named_cursors == [
+        "yahoo_migrate_stock_prices",
+        "yahoo_migrate_valuation_history",
+    ]
 
     # Verify CLI subcommands yahoo-migrate and yahoo-sync
     monkeypatch.setattr(

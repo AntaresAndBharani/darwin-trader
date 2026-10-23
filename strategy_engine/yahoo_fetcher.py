@@ -267,6 +267,7 @@ def fetch_ticker_ohlcv_and_earnings(
             df["Quarterly_Revenue"] = None
 
             if include_fundamentals:
+                latest_quarter: Optional[pd.Timestamp] = None
                 try:
                     quarterly_earnings = getattr(stock, "earning_history", None)
                     if (
@@ -288,6 +289,7 @@ def fetch_ticker_ohlcv_and_earnings(
                                 subset=["Quarter_Date"]
                             )
                             if not qe.empty:
+                                latest_quarter = qe["Quarter_Date"].max()
                                 df = df.drop(columns=["Quarterly_EPS"])
                                 df = pd.merge_asof(
                                     df.sort_values("Date"),
@@ -303,7 +305,14 @@ def fetch_ticker_ohlcv_and_earnings(
                     if isinstance(financials, dict):
                         fin_data = financials.get(yahoo_ticker) or financials.get(clean_sym)
                         if isinstance(fin_data, dict):
-                            df["Quarterly_Revenue"] = sanitize_float(
+                            # `totalRevenue` is a current snapshot: only stamp it on bars
+                            # since the latest reported quarter (or the latest bar if unknown)
+                            # so historical bars are never back-filled with today's figure.
+                            if latest_quarter is not None:
+                                current_mask = df["Date"] >= latest_quarter
+                            else:
+                                current_mask = df["Date"] == df["Date"].max()
+                            df.loc[current_mask, "Quarterly_Revenue"] = sanitize_float(
                                 fin_data.get("totalRevenue")
                             )
                 except Exception as exc:
@@ -542,6 +551,18 @@ def sync_yahoo_tickers(
     }
 
 
+def _open_streaming_cursor(pg_conn: Any, name: str) -> Any:
+    """
+    Open a server-side (named) cursor so `fetchmany` streams rows in chunks instead of
+    buffering the entire result set client-side. Falls back to a regular cursor for
+    connections that do not support named cursors.
+    """
+    try:
+        return pg_conn.cursor(name=name)
+    except TypeError:
+        return pg_conn.cursor()
+
+
 def migrate_postgres_to_sqlite(
     db: YahooFinanceDB,
     pg_host: str = "localhost",
@@ -612,7 +633,7 @@ def migrate_postgres_to_sqlite(
                 progress_callback(stage="tickers", count=migrated_tickers)
 
         # 2. Migrate stock_prices in chunks
-        with pg_conn.cursor() as cur:
+        with _open_streaming_cursor(pg_conn, "yahoo_migrate_stock_prices") as cur:
             cur.execute(
                 """
                 SELECT symbol, date, open, high, low, close, volume,
@@ -652,7 +673,7 @@ def migrate_postgres_to_sqlite(
                     progress_callback(stage="stock_prices", count=migrated_prices)
 
         # 3. Migrate valuation_history in chunks
-        with pg_conn.cursor() as cur:
+        with _open_streaming_cursor(pg_conn, "yahoo_migrate_valuation_history") as cur:
             cur.execute(
                 """
                 SELECT symbol, as_of_date, period_type, trailing_pe, forward_pe,
