@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Strategy Backtest Live Progress Feedback & Black-Screen Crash Resilience (`005-backtest-progress-resilience`)**:
+  - Added live per-ticker backtest progress tracking (`_backtest_state` under `_yahoo_lock` and `GET /api/v1/yahoo/strategies/backtest/status`) in `api_gateway/routes_yahoo.py` and `progress_callback` telemetry hooks in `strategy_engine/yahoo_backtester.py` (`run_yahoo_portfolio_backtest`).
+  - Added `yahooApi.getBacktestStatus()` in `web/src/api/yahoo.ts` and a live per-ticker progress card (`data-testid="strategy-backtest-progress"`, progress bar, current ticker message `"Evaluating K / N tickers ? <SYMBOL>..."`, and 100ms elapsed timer) in `web/src/components/StrategyLifecycleWorkspace.tsx` so clicking **Run Backtest** provides immediate visual feedback instead of a blank dark container.
+  - Created a reusable React `<ErrorBoundary>` component (`web/src/components/ErrorBoundary.tsx`) wrapping each top-level workspace tab in `web/src/App.tsx` with a `Reset Workspace` recovery button while keeping the top `StatusRibbon` and workspace navigation bar interactive so the screen never turns black on a child rendering error.
+  - Hardened `web/src/components/StrategyLifecycleWorkspace.tsx` with defensive numeric formatting (`formatNumber`), smart default ticker selection that prioritizes tickers with `price_bars_count > 0` over 0-bar stub tickers, and a contextual empty-chart overlay (`data-testid="strategy-chart-empty-overlay"`) when `NO_DATA` or 0 bars are present.
+  - Vectorized `DarwinTrendStrategy` indicator calculation (`_ema_fast`, `_ema_slow`, `_rsi`, `_atr`) once per ticker before the bar-by-bar simulation loop in `strategy_engine/yahoo_backtester.py` and `strategy_engine/sample_strategy.py` (`~10x?30x` speedup with 100% identical trade signals).
+  - Suppressed benign WebSocket disconnect socket errors (`ECONNABORTED`, `ECONNRESET`, `EPIPE`) on the `/ws` proxy in `web/vite.config.ts`.
+  - Added unit and integration tests across `strategy_engine/tests/test_yahoo_backtester.py`, `api_gateway/tests/test_routes_yahoo.py`, `web/src/api/yahoo.test.ts`, `web/src/components/ErrorBoundary.test.tsx`, and `web/src/components/StrategyLifecycleWorkspace.test.tsx`.
+
 ### Added
 - **Yahoo Finance Strategy Lifecycle & Backtesting Control Panel (`004-yahoo-strategy-lifecycle`)**:
   - Created `strategy_engine/yahoo_backtester.py` providing dynamic strategy parameter catalog discovery (`get_yahoo_strategies_catalog`), strict parameter validation (`validate_and_build_strategy_config`), zero-lookahead Weekly (`W1`) Heikin-Ashi alignment (`enrich_weekly_heikin_ashi`), single-asset mark-to-market (`MTM`) historical backtesting (`run_single_asset_yahoo_backtest`), and multi-asset/sector portfolio backtesting (`run_yahoo_portfolio_backtest`) with forward-filled equity curve alignment (`ffill().fillna(capital_k)`).

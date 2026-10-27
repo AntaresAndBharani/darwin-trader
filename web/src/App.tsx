@@ -10,6 +10,7 @@ import {
 import { ChartWorkspace } from './components/ChartWorkspace';
 import { YahooWorkspace } from './components/YahooWorkspace';
 import { StrategyLifecycleWorkspace } from './components/StrategyLifecycleWorkspace';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { api } from './api/client';
 import { accountApi } from './api/account';
 
@@ -130,7 +131,7 @@ export const App: FC = () => {
         </header>
 
         {activeTab === 'darwinex' && (
-          <>
+          <ErrorBoundary fallbackTitle="Darwinex MT5 Workspace Error">
             {/* Dashboard overview container */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-5">
@@ -164,12 +165,20 @@ export const App: FC = () => {
             <div className="w-full">
               <PositionsGrid />
             </div>
-          </>
+          </ErrorBoundary>
         )}
 
-        {activeTab === 'yahoo' && <YahooWorkspace />}
+        {activeTab === 'yahoo' && (
+          <ErrorBoundary fallbackTitle="Yahoo Finance Workspace Error">
+            <YahooWorkspace />
+          </ErrorBoundary>
+        )}
 
-        {activeTab === 'strategy' && <StrategyLifecycleWorkspace />}
+        {activeTab === 'strategy' && (
+          <ErrorBoundary fallbackTitle="Strategy Lifecycle Workspace Error">
+            <StrategyLifecycleWorkspace />
+          </ErrorBoundary>
+        )}
       </main>
 
       {/* MetaTrader 5 Connect Modal */}

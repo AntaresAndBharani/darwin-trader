@@ -7,7 +7,7 @@ equity curves, and multi-asset portfolio aggregation.
 """
 from datetime import datetime
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -554,6 +554,10 @@ def run_single_asset_yahoo_backtest(
         strategy = DarwinXZeroTraderStrategy(config=config)
     else:
         strategy = DarwinTrendStrategy(config=config)
+        df["_ema_fast"] = strategy.calculate_ema(df["close"], int(config.fast_ema_period))
+        df["_ema_slow"] = strategy.calculate_ema(df["close"], int(config.slow_ema_period))
+        df["_rsi"] = strategy.calculate_rsi(df["close"], int(config.rsi_period))
+        df["_atr"] = strategy.calculate_atr(df, int(config.atr_period))
 
     balance = float(initial_balance)
     trades: List[Dict[str, Any]] = []
@@ -1006,6 +1010,7 @@ def run_yahoo_portfolio_backtest(
     initial_balance: float = 100000.0,
     risk_per_trade_pct: float = 10.0,
     strategy_params: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[Callable[[str, int, int], None]] = None,
 ) -> Dict[str, Any]:
     """
     Executes single-asset or multi-asset/sector batch backtesting on Yahoo Finance data.
@@ -1062,8 +1067,12 @@ def run_yahoo_portfolio_backtest(
         float(initial_balance) / valid_count if valid_count > 0 else float(initial_balance)
     )
 
+    total_targets = len(target_symbols)
     asset_results: List[Dict[str, Any]] = []
-    for sym in target_symbols:
+    for idx, sym in enumerate(target_symbols):
+        if progress_callback is not None:
+            progress_callback(sym, idx, total_targets)
+
         sym_init_bal = capital_per_symbol if sym in prelim_valid else 0.0
         if sym_init_bal <= 0.0:
             ticker_meta = db.get_ticker(sym) or {
@@ -1111,6 +1120,9 @@ def run_yahoo_portfolio_backtest(
                 strategy_params=applied_params,
             )
             asset_results.append(res)
+
+        if progress_callback is not None:
+            progress_callback(sym, idx + 1, total_targets)
 
     ready_results = [r for r in asset_results if r["status"] == "READY" and r["equity_curve"]]
     if not ready_results:

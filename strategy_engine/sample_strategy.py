@@ -20,25 +20,41 @@ class DarwinTrendStrategy(BaseStrategy):
                 reason="Insufficient historical data"
             )
 
-        df = df.copy()
-        df['ema_fast'] = self.calculate_ema(df['close'], self.config.fast_ema_period)
-        df['ema_slow'] = self.calculate_ema(df['close'], self.config.slow_ema_period)
-        df['rsi'] = self.calculate_rsi(df['close'], self.config.rsi_period)
-        df['atr'] = self.calculate_atr(df, self.config.atr_period)
+        if {"_ema_fast", "_ema_slow", "_rsi", "_atr"}.issubset(df.columns):
+            current = df.iloc[-1]
+            previous = df.iloc[-2]
+            curr_ema_fast = float(current["_ema_fast"])
+            prev_ema_fast = float(previous["_ema_fast"])
+            curr_ema_slow = float(current["_ema_slow"])
+            prev_ema_slow = float(previous["_ema_slow"])
+            curr_rsi = float(current["_rsi"])
+            current_atr = float(current["_atr"])
+            current_price = float(current["close"])
+        else:
+            df = df.copy()
+            df['ema_fast'] = self.calculate_ema(df['close'], self.config.fast_ema_period)
+            df['ema_slow'] = self.calculate_ema(df['close'], self.config.slow_ema_period)
+            df['rsi'] = self.calculate_rsi(df['close'], self.config.rsi_period)
+            df['atr'] = self.calculate_atr(df, self.config.atr_period)
 
-        current = df.iloc[-1]
-        previous = df.iloc[-2]
+            current = df.iloc[-1]
+            previous = df.iloc[-2]
 
-        current_price = float(current['close'])
-        current_atr = float(current['atr'])
+            curr_ema_fast = float(current['ema_fast'])
+            prev_ema_fast = float(previous['ema_fast'])
+            curr_ema_slow = float(current['ema_slow'])
+            prev_ema_slow = float(previous['ema_slow'])
+            curr_rsi = float(current['rsi'])
+            current_price = float(current['close'])
+            current_atr = float(current['atr'])
 
         # Bullish Crossover: Fast EMA crosses above Slow EMA & RSI > 50 & RSI < Overbought
-        bullish_cross = (previous['ema_fast'] <= previous['ema_slow']) and (current['ema_fast'] > current['ema_slow'])
-        bullish_rsi = (current['rsi'] > 50.0) and (current['rsi'] < self.config.rsi_overbought)
+        bullish_cross = (prev_ema_fast <= prev_ema_slow) and (curr_ema_fast > curr_ema_slow)
+        bullish_rsi = (curr_rsi > 50.0) and (curr_rsi < self.config.rsi_overbought)
 
         # Bearish Crossover: Fast EMA crosses below Slow EMA & RSI < 50 & RSI > Oversold
-        bearish_cross = (previous['ema_fast'] >= previous['ema_slow']) and (current['ema_fast'] < current['ema_slow'])
-        bearish_rsi = (current['rsi'] < 50.0) and (current['rsi'] > self.config.rsi_oversold)
+        bearish_cross = (prev_ema_fast >= prev_ema_slow) and (curr_ema_fast < curr_ema_slow)
+        bearish_rsi = (curr_rsi < 50.0) and (curr_rsi > self.config.rsi_oversold)
 
         if bullish_cross and bullish_rsi:
             sl = current_price - (current_atr * self.config.atr_multiplier)
@@ -50,7 +66,7 @@ class DarwinTrendStrategy(BaseStrategy):
                 stop_loss=round(sl, 5),
                 take_profit=round(tp, 5),
                 timestamp=datetime.utcnow(),
-                reason=f"Bullish EMA Crossover (Fast={current['ema_fast']:.5f}, Slow={current['ema_slow']:.5f}, RSI={current['rsi']:.1f})"
+                reason=f"Bullish EMA Crossover (Fast={curr_ema_fast:.5f}, Slow={curr_ema_slow:.5f}, RSI={curr_rsi:.1f})"
             )
 
         if bearish_cross and bearish_rsi:
@@ -63,7 +79,7 @@ class DarwinTrendStrategy(BaseStrategy):
                 stop_loss=round(sl, 5),
                 take_profit=round(tp, 5),
                 timestamp=datetime.utcnow(),
-                reason=f"Bearish EMA Crossover (Fast={current['ema_fast']:.5f}, Slow={current['ema_slow']:.5f}, RSI={current['rsi']:.1f})"
+                reason=f"Bearish EMA Crossover (Fast={curr_ema_fast:.5f}, Slow={curr_ema_slow:.5f}, RSI={curr_rsi:.1f})"
             )
 
         return TradeSignal(

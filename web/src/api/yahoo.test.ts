@@ -91,4 +91,29 @@ describe('Yahoo API Client', () => {
     });
     expect(res.portfolio_metrics.net_profit).toBe(500);
   });
+
+  it('calls GET /yahoo/strategies/backtest/status on getBacktestStatus()', async () => {
+    const mockStatus = {
+      data: {
+        status: 'RUNNING' as const,
+        strategy_id: 'darwin_trend',
+        strategy_name: 'Darwin Trend ATR',
+        timeframe: 'D1',
+        total_symbols: 10,
+        completed_symbols: 4,
+        current_symbol: 'MSFT',
+        progress_pct: 40.0,
+        elapsed_ms: 1250,
+        message: 'Evaluating 5 / 10 tickers — MSFT...',
+      },
+    };
+    const getSpy = vi.spyOn(apiClient, 'get').mockResolvedValueOnce(mockStatus);
+
+    const res = await yahooApi.getBacktestStatus();
+
+    expect(getSpy).toHaveBeenCalledWith('/yahoo/strategies/backtest/status');
+    expect(res.status).toBe('RUNNING');
+    expect(res.current_symbol).toBe('MSFT');
+    expect(res.progress_pct).toBe(40.0);
+  });
 });

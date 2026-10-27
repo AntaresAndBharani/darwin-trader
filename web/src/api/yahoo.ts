@@ -232,6 +232,19 @@ export interface YahooPortfolioBacktestResponse {
   asset_results: YahooAssetBacktestResult[];
 }
 
+export interface YahooBacktestStatusResponse {
+  status: 'IDLE' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  strategy_id: string;
+  strategy_name: string;
+  timeframe: string;
+  total_symbols: number;
+  completed_symbols: number;
+  current_symbol: string;
+  progress_pct: number;
+  elapsed_ms: number;
+  message: string;
+}
+
 export const YAHOO_SYNC_TIMEOUT_MS = 120000;
 
 export const yahooApi = {
@@ -308,6 +321,13 @@ export const yahooApi = {
       '/yahoo/strategies/backtest',
       payload,
       { timeout: YAHOO_SYNC_TIMEOUT_MS },
+    );
+    return res.data;
+  },
+
+  getBacktestStatus: async (): Promise<YahooBacktestStatusResponse> => {
+    const res = await apiClient.get<YahooBacktestStatusResponse>(
+      '/yahoo/strategies/backtest/status',
     );
     return res.data;
   },

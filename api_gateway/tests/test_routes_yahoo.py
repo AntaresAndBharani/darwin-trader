@@ -329,3 +329,31 @@ def test_yahoo_strategies_catalog_and_backtest_endpoints(isolated_yahoo_db):
     )
     assert res_bad.status_code == 400
     assert "fast_ema_period" in res_bad.json()["detail"]
+
+    # Verify backtest status endpoint reports FAILED after a validation error
+    res_status_failed = client.get("/api/v1/yahoo/strategies/backtest/status")
+    assert res_status_failed.status_code == 200
+    assert res_status_failed.json()["status"] == "FAILED"
+
+    # Re-run a valid backtest and verify backtest status endpoint reports COMPLETED with 100% progress
+    res_bt2 = client.post(
+        "/api/v1/yahoo/strategies/backtest",
+        json={
+            "strategy_id": "darwin_trend",
+            "symbols": ["AAPL", "MSFT"],
+            "timeframe": "D1",
+            "initial_balance": 50000.0,
+        },
+    )
+    assert res_bt2.status_code == 200
+
+    res_status_done = client.get("/api/v1/yahoo/strategies/backtest/status")
+    assert res_status_done.status_code == 200
+    done_body = res_status_done.json()
+    assert done_body["status"] == "COMPLETED"
+    assert done_body["strategy_id"] == "darwin_trend"
+    assert done_body["total_symbols"] == 2
+    assert done_body["completed_symbols"] == 2
+    assert done_body["progress_pct"] == pytest.approx(100.0)
+    assert done_body["elapsed_ms"] >= 0
+

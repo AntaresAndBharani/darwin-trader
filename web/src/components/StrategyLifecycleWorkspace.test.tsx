@@ -370,4 +370,145 @@ describe('StrategyLifecycleWorkspace', () => {
       'Portfolio Aggregate',
     );
   });
+
+  it('shows live per-ticker progress bar and elapsed timer while a backtest is running', async () => {
+    let resolveBacktest!: (value: YahooPortfolioBacktestResponse) => void;
+    const pendingBacktest = new Promise<YahooPortfolioBacktestResponse>((resolve) => {
+      resolveBacktest = resolve;
+    });
+
+    vi.spyOn(yahooApi, 'runBacktest').mockReturnValue(pendingBacktest);
+    vi.spyOn(yahooApi, 'getBacktestStatus').mockResolvedValue({
+      status: 'RUNNING',
+      strategy_id: 'darwin_trend',
+      strategy_name: 'Darwin Trend ATR',
+      timeframe: 'D1',
+      total_symbols: 2,
+      completed_symbols: 1,
+      current_symbol: 'MSFT',
+      progress_pct: 50.0,
+      elapsed_ms: 420,
+      message: 'Evaluating 2 / 2 tickers — MSFT...',
+    });
+
+    render(<StrategyLifecycleWorkspace />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('strategy-single-ticker-select')).toHaveValue('AAPL');
+    });
+
+    fireEvent.click(screen.getByTestId('strategy-run-backtest-btn'));
+
+    // Progress card appears immediately with optimistic status
+    const progressCard = screen.getByTestId('strategy-backtest-progress');
+    expect(progressCard).toBeInTheDocument();
+    expect(screen.getByTestId('strategy-progress-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('strategy-elapsed-time')).toHaveTextContent('Elapsed:');
+    expect(screen.getByTestId('strategy-progress-message')).toHaveTextContent(
+      'Evaluating 1 / 1 tickers — AAPL...',
+    );
+
+    // Wait for status polling to update progress message to MSFT (50%)
+    await waitFor(() => {
+      expect(screen.getByTestId('strategy-progress-message')).toHaveTextContent(
+        'Evaluating 2 / 2 tickers — MSFT...',
+      );
+    });
+
+    // Resolve the backtest and confirm progress card disappears while KPIs appear
+    resolveBacktest(mockSingleBacktestResponse);
+    await waitFor(() => {
+      expect(screen.queryByTestId('strategy-backtest-progress')).not.toBeInTheDocument();
+      expect(screen.getByTestId('kpi-net-profit')).toHaveTextContent('$1,400.00');
+    });
+  });
+
+  it('prioritizes tickers with price_bars_count > 0 for default selection and renders empty-chart overlay on NO_DATA results', async () => {
+    vi.spyOn(yahooApi, 'getTickers').mockResolvedValue({
+      total: 2,
+      tickers: [
+        {
+          symbol: '1',
+          name: 'CK Hutchison Holdings',
+          market: 'HKEX',
+          sector: 'Conglomerates',
+          industry: 'Diversified',
+          active: true,
+          price_bars_count: 0,
+        },
+        {
+          symbol: 'NVDA',
+          name: 'NVIDIA Corp.',
+          market: 'NASDAQ',
+          sector: 'Technology',
+          industry: 'Semiconductors',
+          active: true,
+          price_bars_count: 750,
+        },
+      ],
+      facets: { markets: ['HKEX', 'NASDAQ'], sectors: ['Technology'], industries: [] },
+    });
+
+    const noDataBacktestResponse: YahooPortfolioBacktestResponse = {
+      ...mockSingleBacktestResponse,
+      valid_symbols_count: 0,
+      portfolio_equity_curve: [],
+      asset_results: [
+        {
+          symbol: '1',
+          name: 'CK Hutchison Holdings',
+          market: 'HKEX',
+          sector: 'Conglomerates',
+          status: 'NO_DATA',
+          bars_count: 0,
+          effective_from_date: null,
+          effective_to_date: null,
+          latest_signal: 'HOLD',
+          latest_signal_reason: 'No historical price bars available in SQLite',
+          metrics: {
+            initial_balance: 10000,
+            final_equity: 10000,
+            net_profit: 0,
+            net_profit_pct: 0,
+            realized_pnl: 0,
+            realized_pnl_pct: 0,
+            unrealized_pnl: 0,
+            unrealized_pnl_pct: 0,
+            total_trades: 0,
+            winning_trades: 0,
+            losing_trades: 0,
+            win_rate_pct: undefined as unknown as number,
+            profit_factor: undefined as unknown as number,
+            max_drawdown: 0,
+            max_drawdown_pct: undefined as unknown as number,
+            sharpe_ratio: undefined as unknown as number,
+          },
+          equity_curve: [],
+          bars: [],
+          trades: [],
+        },
+      ],
+    };
+
+    vi.spyOn(yahooApi, 'runBacktest').mockResolvedValue(noDataBacktestResponse);
+
+    render(<StrategyLifecycleWorkspace />);
+
+    // Verify smart default skipped 0-bar ticker '1' and selected 'NVDA' (750 bars)
+    await waitFor(() => {
+      expect(screen.getByTestId('strategy-single-ticker-select')).toHaveValue('NVDA');
+    });
+
+    // Run backtest that returns NO_DATA + partial/undefined metrics and verify no crash + chart overlay
+    fireEvent.click(screen.getByTestId('strategy-run-backtest-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('strategy-chart-empty-overlay')).toHaveTextContent(
+        'No historical price bars available for 1 (NO_DATA)',
+      );
+      expect(screen.getByTestId('kpi-win-rate')).toHaveTextContent('0.0%');
+      expect(screen.getByTestId('kpi-profit-factor')).toHaveTextContent('0.00');
+      expect(screen.getByTestId('kpi-sharpe-ratio')).toHaveTextContent('0.00');
+    });
+  });
 });

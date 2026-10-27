@@ -331,3 +331,70 @@ def test_portfolio_keeps_idle_capital_for_symbols_without_in_range_bars(temp_yah
     assert curve[0]["equity"] == pytest.approx(100000.0, abs=1.0)
     assert pm["final_equity"] == pytest.approx(curve[-1]["equity"], abs=0.05)
     assert pm["max_drawdown_pct"] < 50.0
+
+
+def test_portfolio_backtest_invokes_progress_callback(temp_yahoo_db):
+    """
+    Verifies T006 / US1: `run_yahoo_portfolio_backtest` invokes `progress_callback(symbol, completed, total)`
+    before and after evaluating each target ticker in sequence.
+    """
+    _seed_synthetic_stock_history(temp_yahoo_db, symbol="AAPL", days=60)
+    _seed_synthetic_stock_history(temp_yahoo_db, symbol="MSFT", days=60)
+
+    events = []
+
+    def _on_progress(symbol: str, completed: int, total: int) -> None:
+        events.append((symbol, completed, total))
+
+    run_yahoo_portfolio_backtest(
+        db=temp_yahoo_db,
+        strategy_id="darwin_trend",
+        symbols=["AAPL", "MSFT"],
+        timeframe="D1",
+        initial_balance=10000.0,
+        progress_callback=_on_progress,
+    )
+
+    assert events == [
+        ("AAPL", 0, 2),
+        ("AAPL", 1, 2),
+        ("MSFT", 1, 2),
+        ("MSFT", 2, 2),
+    ]
+
+
+def test_darwin_trend_precomputed_indicators_match_standalone_signals(temp_yahoo_db):
+    """
+    Verifies T015 / FR-006: Vectorized precomputation of `_ema_fast`, `_ema_slow`, `_rsi`, `_atr`
+    produces 100% identical TradeSignal outputs to standalone per-bar computation.
+    """
+    from strategy_engine.config import StrategyConfig
+    from strategy_engine.sample_strategy import DarwinTrendStrategy
+
+    _seed_synthetic_stock_history(temp_yahoo_db, symbol="AAPL", days=120)
+    raw_bars = temp_yahoo_db.get_price_history_range("AAPL")
+    df_raw = pd.DataFrame(raw_bars)
+
+    cfg = StrategyConfig(
+        fast_ema_period=8,
+        slow_ema_period=21,
+        rsi_period=10,
+        atr_period=10,
+        atr_multiplier=2.0,
+    )
+    strat = DarwinTrendStrategy(config=cfg)
+
+    df_pre = df_raw.copy()
+    df_pre["_ema_fast"] = strat.calculate_ema(df_pre["close"], cfg.fast_ema_period)
+    df_pre["_ema_slow"] = strat.calculate_ema(df_pre["close"], cfg.slow_ema_period)
+    df_pre["_rsi"] = strat.calculate_rsi(df_pre["close"], cfg.rsi_period)
+    df_pre["_atr"] = strat.calculate_atr(df_pre, cfg.atr_period)
+
+    for idx in range(30, len(df_raw)):
+        sig_raw = strat.generate_signal(df_raw.iloc[: idx + 1])
+        sig_pre = strat.generate_signal(df_pre.iloc[: idx + 1])
+        assert sig_pre.signal_type == sig_raw.signal_type
+        assert sig_pre.reason == sig_raw.reason
+        assert sig_pre.stop_loss == pytest.approx(sig_raw.stop_loss)
+        assert sig_pre.take_profit == pytest.approx(sig_raw.take_profit)
+
