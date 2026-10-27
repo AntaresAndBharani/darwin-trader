@@ -19,6 +19,7 @@ import {
   YahooPortfolioBacktestResponse,
   YahooAssetBacktestResult,
   YahooTradeRecord,
+  YahooBacktestStatusResponse,
 } from '../api/yahoo';
 import { computeHeikinAshi, HeikinAshiBar } from '../utils/heikinAshi';
 
@@ -189,8 +190,13 @@ function buildDefaultParamsMap(strategy: YahooStrategyDefinition): Record<string
   return map;
 }
 
+function formatNumber(val: number | null | undefined, digits = 2, fallback = '0.00'): string {
+  if (val == null || Number.isNaN(val) || !Number.isFinite(val)) return fallback;
+  return val.toFixed(digits);
+}
+
 function formatCurrency(val: number | null | undefined): string {
-  if (val == null || Number.isNaN(val)) return '$0.00';
+  if (val == null || Number.isNaN(val) || !Number.isFinite(val)) return '$0.00';
   const sign = val < 0 ? '-' : '';
   return `${sign}$${Math.abs(val).toLocaleString('en-US', {
     minimumFractionDigits: 2,
@@ -199,7 +205,7 @@ function formatCurrency(val: number | null | undefined): string {
 }
 
 function formatSignedPct(val: number | null | undefined): string {
-  if (val == null || Number.isNaN(val)) return '0.00%';
+  if (val == null || Number.isNaN(val) || !Number.isFinite(val)) return '0.00%';
   const prefix = val > 0 ? '+' : '';
   return `${prefix}${val.toFixed(2)}%`;
 }
@@ -244,6 +250,10 @@ export const StrategyLifecycleWorkspace: FC = () => {
 
   const [isLoadingInit, setIsLoadingInit] = useState<boolean>(false);
   const [isRunningBacktest, setIsRunningBacktest] = useState<boolean>(false);
+  const [backtestProgress, setBacktestProgress] = useState<YahooBacktestStatusResponse | null>(
+    null,
+  );
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
 
   // Chart refs
@@ -282,9 +292,12 @@ export const StrategyLifecycleWorkspace: FC = () => {
         setFacets(tickerRes.facets);
       }
       if (loadedTickers.length > 0) {
-        setSingleSymbol((prev) => prev || loadedTickers[0].symbol);
+        // Prioritize tickers with actual downloaded OHLCV bars over 0-bar stub tickers
+        const tickersWithBars = loadedTickers.filter((t) => (t.price_bars_count ?? 0) > 0);
+        const defaultPool = tickersWithBars.length > 0 ? tickersWithBars : loadedTickers;
+        setSingleSymbol((prev) => prev || defaultPool[0].symbol);
         setBatchSymbols((prev) =>
-          prev.length > 0 ? prev : loadedTickers.slice(0, 3).map((t) => t.symbol),
+          prev.length > 0 ? prev : defaultPool.slice(0, 3).map((t) => t.symbol),
         );
       }
     } catch (err: unknown) {
@@ -297,6 +310,48 @@ export const StrategyLifecycleWorkspace: FC = () => {
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
+
+  // Live elapsed timer and status polling while a backtest is running
+  useEffect(() => {
+    if (!isRunningBacktest) return;
+
+    const startedAt = Date.now();
+    let isCancelled = false;
+
+    const elapsedInterval = window.setInterval(() => {
+      if (!isCancelled) {
+        setElapsedSeconds((Date.now() - startedAt) / 1000);
+      }
+    }, 100);
+
+    let isPolling = false;
+    const pollStatus = async () => {
+      // Skip overlapping polls when a status request outlives the poll interval
+      if (isPolling) return;
+      isPolling = true;
+      try {
+        if (typeof yahooApi.getBacktestStatus !== 'function') return;
+        const statusRes = await yahooApi.getBacktestStatus();
+        // Only accept RUNNING snapshots: a COMPLETED/FAILED status is left over from the
+        // previous run until the server picks up this request, and would flash a stale 100%.
+        if (!isCancelled && statusRes && statusRes.status === 'RUNNING') {
+          setBacktestProgress(statusRes);
+        }
+      } catch {
+        // Ignore transient status polling failures while backtest is in flight
+      } finally {
+        isPolling = false;
+      }
+    };
+
+    const pollInterval = window.setInterval(pollStatus, 200);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(elapsedInterval);
+      window.clearInterval(pollInterval);
+    };
+  }, [isRunningBacktest]);
 
   // Handle strategy change -> reset strategy-specific params to that strategy's defaults
   const handleSelectStrategy = (newStrategyId: string) => {
@@ -382,7 +437,30 @@ export const StrategyLifecycleWorkspace: FC = () => {
       return;
     }
 
+    const targetSymbols =
+      executionMode === 'single'
+        ? [singleSymbol]
+        : batchSymbols.length > 0
+          ? batchSymbols
+          : filteredTickers.map((t) => t.symbol);
+    const initialTotal = Math.max(1, targetSymbols.length);
+    const firstSym = targetSymbols[0] || singleSymbol || 'Portfolio';
+
+    setElapsedSeconds(0);
+    setBacktestProgress({
+      status: 'RUNNING',
+      strategy_id: selectedStrategyId,
+      strategy_name: activeStrategy?.name || selectedStrategyId,
+      timeframe,
+      total_symbols: initialTotal,
+      completed_symbols: 0,
+      current_symbol: firstSym,
+      progress_pct: 0,
+      elapsed_ms: 0,
+      message: `Evaluating 1 / ${initialTotal} tickers — ${firstSym}...`,
+    });
     setIsRunningBacktest(true);
+
     try {
       const payload =
         executionMode === 'single'
@@ -431,7 +509,8 @@ export const StrategyLifecycleWorkspace: FC = () => {
 
   // Determine the currently inspected asset (for Single Asset mode, drilled-down asset, or Price chart fallback)
   const focusedAssetResult: YahooAssetBacktestResult | null = useMemo(() => {
-    if (!backtestResult || backtestResult.asset_results.length === 0) return null;
+    if (!backtestResult || !backtestResult.asset_results || backtestResult.asset_results.length === 0)
+      return null;
     if (focusedSymbol) {
       return (
         backtestResult.asset_results.find((a) => a.symbol === focusedSymbol) ||
@@ -447,7 +526,8 @@ export const StrategyLifecycleWorkspace: FC = () => {
   // For Price & Markers chart mode, we always need a concrete asset
   const priceChartAssetResult: YahooAssetBacktestResult | null = useMemo(() => {
     if (focusedAssetResult) return focusedAssetResult;
-    if (!backtestResult || backtestResult.asset_results.length === 0) return null;
+    if (!backtestResult || !backtestResult.asset_results || backtestResult.asset_results.length === 0)
+      return null;
     return (
       backtestResult.asset_results.find((a) => a.status === 'READY') ||
       backtestResult.asset_results[0]
@@ -467,6 +547,34 @@ export const StrategyLifecycleWorkspace: FC = () => {
     if (focusedAssetResult) return focusedAssetResult.equity_curve || [];
     return backtestResult.portfolio_equity_curve || [];
   }, [backtestResult, focusedAssetResult]);
+
+  // Contextual overlay message when the 360px chart has no plotted points
+  const chartOverlayMessage: string | null = useMemo(() => {
+    if (!backtestResult) {
+      return isRunningBacktest
+        ? backtestProgress?.message || 'Computing historical strategy backtest...'
+        : 'Click "Run Backtest" to plot the Mark-to-Market equity curve and trade execution markers.';
+    }
+    if (chartMode === 'equity' && activeEquityCurve.length === 0) {
+      const sym = focusedAssetResult?.symbol || priceChartAssetResult?.symbol;
+      return sym
+        ? `No historical price bars available for ${sym} (${focusedAssetResult?.status || 'NO_DATA'}) to compute an equity curve.`
+        : 'No historical price bars available in the selected universe to compute an equity curve.';
+    }
+    if (chartMode === 'price' && (priceChartAssetResult?.bars?.length ?? 0) === 0) {
+      const sym = priceChartAssetResult?.symbol || 'selected ticker';
+      return `No historical price bars available for ${sym} (${priceChartAssetResult?.status || 'NO_DATA'}).`;
+    }
+    return null;
+  }, [
+    backtestResult,
+    isRunningBacktest,
+    backtestProgress,
+    chartMode,
+    activeEquityCurve.length,
+    focusedAssetResult,
+    priceChartAssetResult,
+  ]);
 
   // Initialize Lightweight Charts instance
   useEffect(() => {
@@ -568,33 +676,36 @@ export const StrategyLifecycleWorkspace: FC = () => {
       // Build Buy/Sell entry and exit markers from the asset's trades
       const dateToTime = new Map<string, UTCTimestamp>();
       for (const b of rawBars) {
-        dateToTime.set(b.date.slice(0, 10), Number(b.time) as UTCTimestamp);
+        dateToTime.set(String(b.date || '').slice(0, 10), Number(b.time) as UTCTimestamp);
       }
 
       const markers: SeriesMarker<Time>[] = [];
       // Partial scale-outs share their entry with the final close; mark each entry once
       const markedEntries = new Set<string>();
       for (const tr of priceChartAssetResult?.trades || []) {
-        const entryTs = dateToTime.get(tr.entry_date.slice(0, 10));
-        const exitTs = tr.exit_date ? dateToTime.get(tr.exit_date.slice(0, 10)) : undefined;
+        const entryDateKey = String(tr.entry_date || '').slice(0, 10);
+        const exitDateKey = tr.exit_date ? String(tr.exit_date).slice(0, 10) : '';
+        const entryTs = dateToTime.get(entryDateKey);
+        const exitTs = exitDateKey ? dateToTime.get(exitDateKey) : undefined;
 
-        if (entryTs !== undefined && !markedEntries.has(tr.entry_date)) {
-          markedEntries.add(tr.entry_date);
+        if (entryTs !== undefined && !markedEntries.has(entryDateKey)) {
+          markedEntries.add(entryDateKey);
           markers.push({
             time: entryTs,
             position: tr.type === 'BUY' ? 'belowBar' : 'aboveBar',
             color: tr.type === 'BUY' ? '#10b981' : '#f59e0b',
             shape: tr.type === 'BUY' ? 'arrowUp' : 'arrowDown',
-            text: `${tr.type} @ $${tr.entry_price.toFixed(2)}`,
+            text: `${tr.type} @ $${formatNumber(tr.entry_price, 2)}`,
           });
         }
         if (exitTs !== undefined) {
+          const pnlVal = tr.pnl ?? 0;
           markers.push({
             time: exitTs,
             position: 'aboveBar',
-            color: tr.pnl >= 0 ? '#34d399' : '#f87171',
+            color: pnlVal >= 0 ? '#34d399' : '#f87171',
             shape: 'circle',
-            text: `${tr.reason} (${tr.pnl >= 0 ? '+' : ''}$${tr.pnl.toFixed(0)})`,
+            text: `${tr.reason || 'Exit'} (${pnlVal >= 0 ? '+' : ''}$${formatNumber(tr.pnl, 0, '0')})`,
           });
         }
       }
@@ -607,7 +718,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
 
   // Trades to display in the Trade Execution Log
   const displayedTrades: YahooTradeRecord[] = useMemo(() => {
-    if (!backtestResult) return [];
+    if (!backtestResult || !backtestResult.asset_results) return [];
     if (focusedAssetResult && tradeLogScope === 'focused') {
       return focusedAssetResult.trades || [];
     }
@@ -1022,6 +1133,62 @@ export const StrategyLifecycleWorkspace: FC = () => {
           data-testid="strategy-results-dashboard"
           className="lg:col-span-8 flex flex-col gap-5"
         >
+          {/* Live Backtest Execution Progress Card */}
+          {isRunningBacktest && (
+            <div
+              data-testid="strategy-backtest-progress"
+              className="bg-zinc-900/90 border border-emerald-700/70 rounded-lg p-4 flex flex-col gap-3 shadow-lg"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <span
+                    aria-hidden="true"
+                    className="inline-block w-3.5 h-3.5 rounded-full border-2 border-emerald-400 border-t-transparent animate-spin"
+                  />
+                  <span className="text-sm font-bold text-emerald-300">
+                    Running Strategy Backtest...
+                  </span>
+                  <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300">
+                    {backtestProgress?.strategy_name || activeStrategy?.name || selectedStrategyId}{' '}
+                    ({timeframe})
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-xs font-mono">
+                  <span
+                    data-testid="strategy-elapsed-time"
+                    className="px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-800 text-emerald-300"
+                  >
+                    Elapsed: {elapsedSeconds.toFixed(1)}s
+                  </span>
+                  <span className="text-zinc-300 font-semibold">
+                    {formatNumber(backtestProgress?.progress_pct ?? 0, 0, '0')}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="w-full h-2 bg-zinc-950 border border-zinc-800 rounded-full overflow-hidden">
+                <div
+                  data-testid="strategy-progress-bar"
+                  className="h-full bg-emerald-500 transition-all duration-200"
+                  style={{
+                    width: `${Math.min(100, Math.max(5, backtestProgress?.progress_pct ?? 5))}%`,
+                  }}
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono text-zinc-400">
+                <span data-testid="strategy-progress-message">
+                  {backtestProgress?.message ||
+                    'Evaluating strategy across selected Yahoo Finance universe...'}
+                </span>
+                <span>
+                  {backtestProgress?.completed_symbols ?? 0} /{' '}
+                  {backtestProgress?.total_symbols ?? 1} tickers
+                </span>
+              </div>
+            </div>
+          )}
+
           {!backtestResult && !isRunningBacktest && (
             <div
               data-testid="strategy-empty-state"
@@ -1083,7 +1250,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
                 <div
                   data-testid="kpi-net-profit"
                   className={`text-base font-mono font-bold ${
-                    activeMetrics.net_profit >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                    (activeMetrics.net_profit ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
                   }`}
                 >
                   {formatCurrency(activeMetrics.net_profit)}{' '}
@@ -1116,7 +1283,9 @@ export const StrategyLifecycleWorkspace: FC = () => {
                     Realized:{' '}
                     <strong
                       className={
-                        activeMetrics.realized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                        (activeMetrics.realized_pnl ?? 0) >= 0
+                          ? 'text-emerald-400'
+                          : 'text-rose-400'
                       }
                     >
                       {formatCurrency(activeMetrics.realized_pnl)}
@@ -1126,7 +1295,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
                     Unrealized:{' '}
                     <strong
                       className={
-                        activeMetrics.unrealized_pnl >= 0
+                        (activeMetrics.unrealized_pnl ?? 0) >= 0
                           ? 'text-emerald-400'
                           : 'text-rose-400'
                       }
@@ -1143,11 +1312,11 @@ export const StrategyLifecycleWorkspace: FC = () => {
                   data-testid="kpi-win-rate"
                   className="text-base font-mono font-bold text-zinc-100"
                 >
-                  {activeMetrics.win_rate_pct.toFixed(1)}%
+                  {formatNumber(activeMetrics.win_rate_pct, 1, '0.0')}%
                 </div>
                 <span className="text-[10px] font-mono text-zinc-400">
-                  {activeMetrics.winning_trades}W / {activeMetrics.losing_trades}L (
-                  {activeMetrics.total_trades} total)
+                  {activeMetrics.winning_trades ?? 0}W / {activeMetrics.losing_trades ?? 0}L (
+                  {activeMetrics.total_trades ?? 0} total)
                 </span>
               </div>
 
@@ -1157,7 +1326,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
                   data-testid="kpi-profit-factor"
                   className="text-base font-mono font-bold text-zinc-100"
                 >
-                  {activeMetrics.profit_factor.toFixed(2)}
+                  {formatNumber(activeMetrics.profit_factor, 2)}
                 </div>
               </div>
 
@@ -1168,7 +1337,9 @@ export const StrategyLifecycleWorkspace: FC = () => {
                   className="text-base font-mono font-bold text-rose-400"
                 >
                   {formatCurrency(activeMetrics.max_drawdown)}{' '}
-                  <span className="text-xs">(-{activeMetrics.max_drawdown_pct.toFixed(2)}%)</span>
+                  <span className="text-xs">
+                    (-{formatNumber(activeMetrics.max_drawdown_pct, 2)}%)
+                  </span>
                 </div>
               </div>
 
@@ -1178,7 +1349,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
                   data-testid="kpi-sharpe-ratio"
                   className="text-base font-mono font-bold text-zinc-100"
                 >
-                  {activeMetrics.sharpe_ratio.toFixed(2)}
+                  {formatNumber(activeMetrics.sharpe_ratio, 2)}
                 </div>
               </div>
 
@@ -1249,7 +1420,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
                     >
                       {backtestResult.asset_results.map((ar) => (
                         <option key={ar.symbol} value={ar.symbol}>
-                          {ar.symbol} ({ar.trades.length} trades)
+                          {ar.symbol} ({(ar.trades || []).length} trades)
                         </option>
                       ))}
                     </select>
@@ -1305,6 +1476,16 @@ export const StrategyLifecycleWorkspace: FC = () => {
                 data-testid="strategy-chart-canvas"
                 className="w-full h-[360px]"
               />
+              {chartOverlayMessage && (
+                <div
+                  data-testid="strategy-chart-empty-overlay"
+                  className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-zinc-950/85 pointer-events-none"
+                >
+                  <span className="text-xs font-mono text-zinc-400 max-w-md">
+                    {chartOverlayMessage}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1375,37 +1556,37 @@ export const StrategyLifecycleWorkspace: FC = () => {
                               {ar.status}
                             </span>
                           </td>
-                          <td className="py-2 px-2">{ar.bars_count}</td>
-                          <td className="py-2 px-2">{ar.metrics.total_trades}</td>
+                          <td className="py-2 px-2">{ar.bars_count ?? 0}</td>
+                          <td className="py-2 px-2">{ar.metrics?.total_trades ?? 0}</td>
                           <td className="py-2 px-2">
-                            {ar.metrics.win_rate_pct.toFixed(1)}%
+                            {formatNumber(ar.metrics?.win_rate_pct, 1, '0.0')}%
                           </td>
                           <td
                             className={`py-2 px-2 font-semibold ${
-                              ar.metrics.net_profit >= 0
+                              (ar.metrics?.net_profit ?? 0) >= 0
                                 ? 'text-emerald-400'
                                 : 'text-rose-400'
                             }`}
                           >
-                            {formatCurrency(ar.metrics.net_profit)}
+                            {formatCurrency(ar.metrics?.net_profit)}
                           </td>
                           <td
                             className={`py-2 px-2 ${
-                              ar.metrics.net_profit_pct >= 0
+                              (ar.metrics?.net_profit_pct ?? 0) >= 0
                                 ? 'text-emerald-400'
                                 : 'text-rose-400'
                             }`}
                           >
-                            {formatSignedPct(ar.metrics.net_profit_pct)}
+                            {formatSignedPct(ar.metrics?.net_profit_pct)}
                           </td>
                           <td className="py-2 px-2">
-                            {formatCurrency(ar.metrics.unrealized_pnl)}
+                            {formatCurrency(ar.metrics?.unrealized_pnl)}
                           </td>
                           <td className="py-2 px-2 text-rose-400">
-                            -{ar.metrics.max_drawdown_pct.toFixed(2)}%
+                            -{formatNumber(ar.metrics?.max_drawdown_pct, 2)}%
                           </td>
                           <td className="py-2 px-2">
-                            {ar.metrics.sharpe_ratio.toFixed(2)}
+                            {formatNumber(ar.metrics?.sharpe_ratio, 2)}
                           </td>
                           <td className="py-2 pl-2">
                             <span
@@ -1417,7 +1598,7 @@ export const StrategyLifecycleWorkspace: FC = () => {
                                     : 'bg-zinc-800 text-zinc-400'
                               }`}
                             >
-                              {ar.latest_signal}
+                              {ar.latest_signal || 'HOLD'}
                             </span>
                           </td>
                         </tr>
@@ -1501,28 +1682,28 @@ export const StrategyLifecycleWorkspace: FC = () => {
                               {tr.type}
                             </span>
                           </td>
-                          <td className="py-1.5 px-2">{tr.entry_date}</td>
+                          <td className="py-1.5 px-2">{tr.entry_date || '—'}</td>
                           <td className="py-1.5 px-2">{tr.exit_date ?? 'Open'}</td>
-                          <td className="py-1.5 px-2">${tr.entry_price.toFixed(2)}</td>
-                          <td className="py-1.5 px-2">${tr.exit_price.toFixed(2)}</td>
-                          <td className="py-1.5 px-2">{tr.units.toFixed(2)}</td>
+                          <td className="py-1.5 px-2">${formatNumber(tr.entry_price, 2)}</td>
+                          <td className="py-1.5 px-2">${formatNumber(tr.exit_price, 2)}</td>
+                          <td className="py-1.5 px-2">{formatNumber(tr.units, 2)}</td>
                           <td
                             className={`py-1.5 px-2 font-semibold ${
-                              tr.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                              (tr.pnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
                             }`}
                           >
                             {formatCurrency(tr.pnl)}
                           </td>
                           <td
                             className={`py-1.5 px-2 ${
-                              tr.pnl_pct >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                              (tr.pnl_pct ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
                             }`}
                           >
                             {formatSignedPct(tr.pnl_pct)}
                           </td>
                           <td className="py-1.5 px-2">
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700">
-                              {tr.reason}
+                              {tr.reason || '—'}
                             </span>
                           </td>
                           <td className="py-1.5 pl-2">

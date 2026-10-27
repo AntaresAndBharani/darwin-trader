@@ -16,6 +16,13 @@ const DEFAULT_LOGIN = 4000073238;
 const DEFAULT_SERVER = 'Darwinex-Live';
 const DEFAULT_TERMINAL_PATH = 'C:\\Program Files\\Darwinex MetaTrader 5\\terminal64.exe';
 
+const BENIGN_SOCKET_CODES = new Set(['ECONNABORTED', 'ECONNRESET', 'EPIPE']);
+
+function isBenignSocketError(err: unknown): boolean {
+  const code = (err as { code?: string })?.code;
+  return Boolean(code && BENIGN_SOCKET_CODES.has(code));
+}
+
 function checkPortOpen(host: string, port: number, timeoutMs = 1000): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = new net.Socket();
@@ -157,6 +164,27 @@ export default defineConfig({
         target: 'ws://localhost:8000',
         ws: true,
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            if (!isBenignSocketError(err)) {
+              console.error('[vite] ws proxy error:', err);
+            }
+          });
+          proxy.on('proxyReqWs', (_proxyReq, _req, socket) => {
+            socket.on('error', (err) => {
+              if (!isBenignSocketError(err)) {
+                console.error('[vite] ws client socket error:', err);
+              }
+            });
+          });
+          proxy.on('open', (proxySocket) => {
+            proxySocket.on('error', (err) => {
+              if (!isBenignSocketError(err)) {
+                console.error('[vite] ws target socket error:', err);
+              }
+            });
+          });
+        },
       },
     },
   },

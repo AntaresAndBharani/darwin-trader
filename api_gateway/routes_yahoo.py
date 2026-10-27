@@ -4,6 +4,7 @@ FastAPI Router for Yahoo Finance Market Data, Ticker Metadata, Fundamentals & Sy
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
@@ -29,6 +30,19 @@ _sync_state: Dict[str, Any] = {
     "failed_tickers": 0,
     "rows_upserted": 0,
     "valuations_upserted": 0,
+    "message": "Idle",
+}
+
+_backtest_state: Dict[str, Any] = {
+    "status": "IDLE",
+    "strategy_id": "darwin_trend",
+    "strategy_name": "Darwin Trend ATR",
+    "timeframe": "D1",
+    "total_symbols": 0,
+    "completed_symbols": 0,
+    "current_symbol": "",
+    "progress_pct": 0.0,
+    "elapsed_ms": 0,
     "message": "Idle",
 }
 
@@ -322,14 +336,69 @@ def list_yahoo_strategies() -> Dict[str, Any]:
     return {"strategies": get_yahoo_strategies_catalog()}
 
 
+@router.get("/strategies/backtest/status")
+def get_yahoo_backtest_status() -> Dict[str, Any]:
+    """Return current Yahoo Finance strategy backtest execution progress."""
+    with _yahoo_lock:
+        return dict(_backtest_state)
+
+
 @router.post("/strategies/backtest")
 def execute_yahoo_strategy_backtest(req: YahooBacktestRequest) -> Dict[str, Any]:
     """
     Execute an on-demand historical backtest for one or more Yahoo Finance tickers.
     Runs strictly against `YahooFinanceDB` (`data/yahoo_finance.db`), never touching Darwinex MT5.
     """
+    start_ts = time.perf_counter()
+    catalog = {s["id"]: s["name"] for s in get_yahoo_strategies_catalog()}
+    strategy_name = catalog.get(req.strategy_id, req.strategy_id)
+    tf_norm = (req.timeframe or "D1").strip().upper()
+    initial_total = len(req.symbols) if req.symbols else 0
+
+    with _yahoo_lock:
+        _backtest_state.update(
+            {
+                "status": "RUNNING",
+                "strategy_id": req.strategy_id,
+                "strategy_name": strategy_name,
+                "timeframe": tf_norm,
+                "total_symbols": initial_total,
+                "completed_symbols": 0,
+                "current_symbol": req.symbols[0] if req.symbols else "",
+                "progress_pct": 0.0,
+                "elapsed_ms": 0,
+                "message": (
+                    f"Evaluating 1 / {initial_total} tickers — {req.symbols[0]}..."
+                    if req.symbols
+                    else "Starting strategy backtest..."
+                ),
+            }
+        )
+
+    def _on_backtest_progress(symbol: str, completed: int, total: int) -> None:
+        elapsed_ms = int((time.perf_counter() - start_ts) * 1000)
+        pct = round((completed / total) * 100.0, 1) if total > 0 else 0.0
+        active_idx = min(completed + 1, total) if total > 0 else 1
+        msg = (
+            f"Evaluating {active_idx} / {total} tickers — {symbol}..."
+            if completed < total
+            else f"Completed {total} / {total} tickers"
+        )
+        with _yahoo_lock:
+            _backtest_state.update(
+                {
+                    "status": "RUNNING",
+                    "total_symbols": total,
+                    "completed_symbols": completed,
+                    "current_symbol": symbol,
+                    "progress_pct": pct,
+                    "elapsed_ms": elapsed_ms,
+                    "message": msg,
+                }
+            )
+
     try:
-        return run_yahoo_portfolio_backtest(
+        result = run_yahoo_portfolio_backtest(
             db=yahoo_db,
             strategy_id=req.strategy_id,
             symbols=req.symbols,
@@ -341,6 +410,44 @@ def execute_yahoo_strategy_backtest(req: YahooBacktestRequest) -> Dict[str, Any]
             initial_balance=req.initial_balance,
             risk_per_trade_pct=req.risk_per_trade_pct,
             strategy_params=req.strategy_params,
+            progress_callback=_on_backtest_progress,
         )
+        elapsed_ms = int((time.perf_counter() - start_ts) * 1000)
+        total_req = int(result.get("total_symbols_requested") or 0)
+        with _yahoo_lock:
+            _backtest_state.update(
+                {
+                    "status": "COMPLETED",
+                    "strategy_id": result.get("strategy_id", req.strategy_id),
+                    "strategy_name": result.get("strategy_name", strategy_name),
+                    "timeframe": result.get("timeframe", tf_norm),
+                    "total_symbols": total_req,
+                    "completed_symbols": total_req,
+                    "progress_pct": 100.0,
+                    "elapsed_ms": elapsed_ms,
+                    "message": f"Completed {total_req} / {total_req} tickers",
+                }
+            )
+        return result
     except ValueError as exc:
+        elapsed_ms = int((time.perf_counter() - start_ts) * 1000)
+        with _yahoo_lock:
+            _backtest_state.update(
+                {
+                    "status": "FAILED",
+                    "elapsed_ms": elapsed_ms,
+                    "message": str(exc),
+                }
+            )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        elapsed_ms = int((time.perf_counter() - start_ts) * 1000)
+        with _yahoo_lock:
+            _backtest_state.update(
+                {
+                    "status": "FAILED",
+                    "elapsed_ms": elapsed_ms,
+                    "message": f"Backtest error: {exc}",
+                }
+            )
+        raise
