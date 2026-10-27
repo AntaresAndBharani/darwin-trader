@@ -6,6 +6,7 @@ handling, and multi-asset/sector portfolio aggregation.
 """
 from datetime import date, timedelta
 import math
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -393,6 +394,28 @@ def test_darwin_trend_precomputed_indicators_match_standalone_signals(temp_yahoo
     for idx in range(30, len(df_raw)):
         sig_raw = strat.generate_signal(df_raw.iloc[: idx + 1])
         sig_pre = strat.generate_signal(df_pre.iloc[: idx + 1])
+        assert sig_pre.signal_type == sig_raw.signal_type
+        assert sig_pre.reason == sig_raw.reason
+        assert sig_pre.stop_loss == pytest.approx(sig_raw.stop_loss)
+        assert sig_pre.take_profit == pytest.approx(sig_raw.take_profit)
+
+    # The backtester evaluates sliding windows (`df.iloc[i - warmup - 5 : i + 1]`); standalone EMAs
+    # are then seeded at the window start, so precomputed EMAs must be re-seeded to match exactly.
+    # A noisy random walk produces frequent near-tie crossovers that expose any EMA seeding drift.
+    warmup = max(cfg.slow_ema_period, cfg.rsi_period, cfg.atr_period) + 15
+    rng = np.random.default_rng(7)
+    close = 100.0 * np.exp(np.cumsum(rng.normal(0.0, 0.015, 600)))
+    df_walk = pd.DataFrame({"open": close, "high": close * 1.01, "low": close * 0.99, "close": close})
+    df_walk_pre = df_walk.copy()
+    df_walk_pre["_ema_fast"] = strat.calculate_ema(df_walk["close"], cfg.fast_ema_period)
+    df_walk_pre["_ema_slow"] = strat.calculate_ema(df_walk["close"], cfg.slow_ema_period)
+    df_walk_pre["_rsi"] = strat.calculate_rsi(df_walk["close"], cfg.rsi_period)
+    df_walk_pre["_atr"] = strat.calculate_atr(df_walk, cfg.atr_period)
+
+    for idx in range(warmup, len(df_walk)):
+        window_start = max(0, idx - warmup - 5)
+        sig_raw = strat.generate_signal(df_walk.iloc[window_start : idx + 1])
+        sig_pre = strat.generate_signal(df_walk_pre.iloc[window_start : idx + 1])
         assert sig_pre.signal_type == sig_raw.signal_type
         assert sig_pre.reason == sig_raw.reason
         assert sig_pre.stop_loss == pytest.approx(sig_raw.stop_loss)

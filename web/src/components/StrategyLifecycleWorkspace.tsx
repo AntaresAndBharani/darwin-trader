@@ -324,19 +324,23 @@ export const StrategyLifecycleWorkspace: FC = () => {
       }
     }, 100);
 
+    let isPolling = false;
     const pollStatus = async () => {
+      // Skip overlapping polls when a status request outlives the poll interval
+      if (isPolling) return;
+      isPolling = true;
       try {
         if (typeof yahooApi.getBacktestStatus !== 'function') return;
         const statusRes = await yahooApi.getBacktestStatus();
-        if (
-          !isCancelled &&
-          statusRes &&
-          (statusRes.status === 'RUNNING' || statusRes.total_symbols > 0)
-        ) {
+        // Only accept RUNNING snapshots: a COMPLETED/FAILED status is left over from the
+        // previous run until the server picks up this request, and would flash a stale 100%.
+        if (!isCancelled && statusRes && statusRes.status === 'RUNNING') {
           setBacktestProgress(statusRes);
         }
       } catch {
         // Ignore transient status polling failures while backtest is in flight
+      } finally {
+        isPolling = false;
       }
     };
 

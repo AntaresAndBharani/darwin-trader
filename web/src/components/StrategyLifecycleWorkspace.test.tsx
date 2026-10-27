@@ -423,6 +423,49 @@ describe('StrategyLifecycleWorkspace', () => {
     });
   });
 
+  it('ignores stale COMPLETED status from a previous run while a new backtest is starting', async () => {
+    let resolveBacktest!: (value: YahooPortfolioBacktestResponse) => void;
+    const pendingBacktest = new Promise<YahooPortfolioBacktestResponse>((resolve) => {
+      resolveBacktest = resolve;
+    });
+
+    vi.spyOn(yahooApi, 'runBacktest').mockReturnValue(pendingBacktest);
+    const statusSpy = vi.spyOn(yahooApi, 'getBacktestStatus').mockResolvedValue({
+      status: 'COMPLETED',
+      strategy_id: 'darwin_trend',
+      strategy_name: 'Darwin Trend ATR',
+      timeframe: 'D1',
+      total_symbols: 5,
+      completed_symbols: 5,
+      current_symbol: 'TSLA',
+      progress_pct: 100.0,
+      elapsed_ms: 900,
+      message: 'Completed 5 / 5 tickers',
+    });
+
+    render(<StrategyLifecycleWorkspace />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('strategy-single-ticker-select')).toHaveValue('AAPL');
+    });
+
+    fireEvent.click(screen.getByTestId('strategy-run-backtest-btn'));
+
+    // A second poll only fires after the first one has fully resolved (in-flight guard)
+    await waitFor(() => {
+      expect(statusSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    expect(screen.getByTestId('strategy-progress-message')).toHaveTextContent(
+      'Evaluating 1 / 1 tickers — AAPL...',
+    );
+
+    resolveBacktest(mockSingleBacktestResponse);
+    await waitFor(() => {
+      expect(screen.queryByTestId('strategy-backtest-progress')).not.toBeInTheDocument();
+    });
+  });
+
   it('prioritizes tickers with price_bars_count > 0 for default selection and renders empty-chart overlay on NO_DATA results', async () => {
     vi.spyOn(yahooApi, 'getTickers').mockResolvedValue({
       total: 2,

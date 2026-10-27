@@ -21,12 +21,22 @@ class DarwinTrendStrategy(BaseStrategy):
             )
 
         if {"_ema_fast", "_ema_slow", "_rsi", "_atr"}.issubset(df.columns):
+            first = df.iloc[0]
             current = df.iloc[-1]
             previous = df.iloc[-2]
-            curr_ema_fast = float(current["_ema_fast"])
-            prev_ema_fast = float(previous["_ema_fast"])
-            curr_ema_slow = float(current["_ema_slow"])
-            prev_ema_slow = float(previous["_ema_slow"])
+            steps = len(df) - 1
+            # Precomputed EMAs span the full series, while a standalone EMA is seeded at this
+            # window's first close. For adjust=False EMAs the gap decays by (1 - alpha) per bar,
+            # so re-seed in closed form to keep signals identical to the per-window computation.
+            seed_close = float(first["close"])
+            fast_decay = 1.0 - 2.0 / (self.config.fast_ema_period + 1)
+            slow_decay = 1.0 - 2.0 / (self.config.slow_ema_period + 1)
+            fast_gap = seed_close - float(first["_ema_fast"])
+            slow_gap = seed_close - float(first["_ema_slow"])
+            curr_ema_fast = float(current["_ema_fast"]) + fast_gap * fast_decay ** steps
+            prev_ema_fast = float(previous["_ema_fast"]) + fast_gap * fast_decay ** (steps - 1)
+            curr_ema_slow = float(current["_ema_slow"]) + slow_gap * slow_decay ** steps
+            prev_ema_slow = float(previous["_ema_slow"]) + slow_gap * slow_decay ** (steps - 1)
             curr_rsi = float(current["_rsi"])
             current_atr = float(current["_atr"])
             current_price = float(current["close"])
